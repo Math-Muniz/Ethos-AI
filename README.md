@@ -1,1 +1,1 @@
-# Psi-Agent
+# Ethos-AI
