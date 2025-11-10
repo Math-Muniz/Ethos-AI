@@ -51,10 +51,17 @@ logger.info(f"✅ Whitelist carregada com {len(ALLOWED_USER_IDS)} usuários auto
 # Validação de API Keys
 api_key = os.getenv("OPENAI_API_KEY")
 model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-model_evaluator = os.getenv("OPENAI_MODEL_EVALUATOR", "gpt-4o")  
-if not api_key or not model or not model_evaluator:  
-    st.error("⚠️ OPENAI_API_KEY ou OPENAI_MODEL ou OPENAI_MODEL_EVALUATOR não encontrados!")
+model_evaluator = os.getenv("OPENAI_MODEL_EVALUATOR", "gpt-4o")
+
+if not api_key:
+    st.error("⚠️ OPENAI_API_KEY não encontrada! Configure no ambiente.")
     st.stop()
+
+if not model or not model_evaluator:
+    st.error("⚠️ OPENAI_MODEL ou OPENAI_MODEL_EVALUATOR não encontrados! Configure no ambiente.")
+    st.stop()
+
+logger.info(f"✅ Modelos configurados: Patient={model}, Evaluator={model_evaluator}")
 
 # --- 3. ESTRUTURAS DE DADOS E DEFINIÇÕES GLOBAIS ---
 PERSONAS_DATA = [
@@ -797,4 +804,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
