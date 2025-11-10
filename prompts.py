@@ -1037,8 +1037,3 @@ Pontos Fortes: Destaque as áreas em que o terapeuta demonstrou excelente adesã
 
 Recomendações Construtivas: Ofereça sugestões claras e práticas para o terapeuta melhorar a adesão em sessões futuras.
 """
-
-
-
-
-
