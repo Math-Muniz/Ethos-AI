@@ -58,8 +58,8 @@ if not api_key or not model:
 # --- 3. ESTRUTURAS DE DADOS E DEFINIÇÕES GLOBAIS ---
 PERSONAS_DATA = [
     {"name": "Clara", "prompt": PERSONA_CLARA, "order": 1},
-    {"name": "Rafael", "prompt": PERSONA_RAFAEL, "order": 2},
-    {"name": "Luiz", "prompt": PERSONA_LUIZ, "order": 3},
+    {"name": "Luiz", "prompt": PERSONA_LUIZ, "order": 2},
+    {"name": "Rafael", "prompt": PERSONA_RAFAEL, "order": 3},
 ]
 
 EVALUATION_PROMPTS = {
@@ -796,4 +796,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
