@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: ethos-ai
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_PORT
+        value: 6543
+      - key: POSTGRES_DB
+        value: postgres
+      - key: ALLOWED_USER_IDS
+        sync: false
+      - key: LANGSMITH_TRACING
+        value: true
+      - key: LANGSMITH_ENDPOINT
+        value: https://api.smith.langchain.com
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: ethos-ai
