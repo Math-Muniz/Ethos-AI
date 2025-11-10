@@ -1,1 +1,17 @@
+[server]
+# Porta dinâmica para Render (usa variável de ambiente PORT)
+port = 8501
+headless = true
+enableCORS = false
+enableXsrfProtection = true
 
+[browser]
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+
+[theme]
+base = "dark"
+primaryColor = "#4A90E2"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#1E2129"
+textColor = "#FAFAFA"
