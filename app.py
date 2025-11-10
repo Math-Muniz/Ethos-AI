@@ -29,7 +29,7 @@ from prompts import (
 # --- 1. CONFIGURAÇÃO INICIAL E LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-st.set_page_config(page_title="Simulador de Terapia (Project Match)", page_icon="⚕️")
+st.set_page_config(page_title="ETHOS AI", page_icon="⚕️")
 load_dotenv()
 
 # --- 2. CONSTANTES E VALIDAÇÕES INICIAIS ---
@@ -610,7 +610,7 @@ if url_thread_id and url_thread_id != current_thread_id:
 elif "thread_id" not in st.session_state:
     initialize_session(url_thread_id)
 
-st.title("Simulador de Terapia (Project Match)")
+st.title("ETHOS AI")
 
 # --- 12. INTERFACE ---
 
@@ -804,5 +804,3 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
-
-
