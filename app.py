@@ -63,7 +63,6 @@ if st.query_params.get("health") == "check":
     # Verificar variáveis críticas
     health_status["config"] = {
         "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
-        "allowed_users_count": len(ALLOWED_USER_IDS)
     }
     
     st.json(health_status)
@@ -846,5 +845,6 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
