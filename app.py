@@ -3,6 +3,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import uuid
 import logging
+import secrets
 from typing import List, Annotated, TypedDict, Dict, Optional
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -832,4 +833,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
