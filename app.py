@@ -220,6 +220,16 @@ def execute_db_query(query: str, params: tuple = None, fetch: bool = False):
                     conn.close()
                 except:
                     pass
+                    
+def validate_db_connection():
+    """Valida se a conexão com o banco está funcionando."""
+    try:
+        execute_db_query("SELECT 1", fetch=True)
+        logger.info("✅ Conexão com banco de dados validada")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Conexão com banco falhou: {e}")
+        return False
 
 def setup_database():
     """Configura tabelas no Supabase."""
@@ -841,6 +851,7 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
 
