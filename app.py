@@ -741,7 +741,15 @@ with st.sidebar:
                             "patient_prompt": st.session_state.current_patient['prompt'],
                             "persona_name": st.session_state.current_patient['name']
                         }, 
-                        {"configurable": {"thread_id": st.session_state.thread_id}}
+                        {
+                            "configurable": {"thread_id": st.session_state.thread_id},
+                            "metadata": {
+                                "user_id": st.session_state.user_id,
+                                "persona": st.session_state.current_patient['name'],
+                                "session_num": st.session_state.current_session_num,
+                                "action": "evaluate_session"
+                            }
+                        }
                     )
                     
                     st.session_state.messages.append(response["messages"][-1])
@@ -833,5 +841,6 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
