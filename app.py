@@ -813,13 +813,23 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                         "patient_prompt": st.session_state.current_patient['prompt'],
                         "persona_name": st.session_state.current_patient['name']
                     },
-                    {"configurable": {"thread_id": st.session_state.thread_id}}
+                    {
+                        "configurable": {"thread_id": st.session_state.thread_id},
+                        "metadata": {
+                            "user_id": st.session_state.user_id,
+                            "persona": st.session_state.current_patient['name'],
+                            "session_num": st.session_state.current_session_num,
+                            "action": "patient_response"
+                        }
+                    }
                 )
                 ai_response = response["messages"][-1]
                 st.session_state.messages.append(ai_response)
                 st.rerun()
+            except TimeoutError:
+                st.error("⏱️ Tempo limite excedido. Tente novamente.")
+            except ConnectionError:
+                st.error("🔌 Erro de conexão. Verifique sua internet.")
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
-
-
