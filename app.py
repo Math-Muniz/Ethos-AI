@@ -68,7 +68,7 @@ logger.info(f"✅ Whitelist carregada com {len(ALLOWED_USER_IDS)} usuários auto
 # Validação de API Keys
 api_key = os.getenv("OPENAI_API_KEY")
 model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-model_evaluator = os.getenv("OPENAI_MODEL_EVALUATOR", "gpt-4o")
+model_evaluator = os.getenv("OPENAI_MODEL_EVALUATOR", "gpt-4o-mini")
 
 if not api_key:
     st.error("⚠️ OPENAI_API_KEY não encontrada! Configure no ambiente.")
@@ -826,3 +826,4 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
