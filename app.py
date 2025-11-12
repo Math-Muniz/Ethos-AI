@@ -49,21 +49,13 @@ if st.query_params.get("health") == "check":
         "version": "1.0.0"
     }
     
-    # Verificar conexão com banco
-    try:
-        db_ok = validate_db_connection()
-        health_status["database"] = "connected" if db_ok else "disconnected"
-    except:
-        health_status["database"] = "error"
-        health_status["status"] = "unhealthy"
-    
     # Verificar LangSmith
     health_status["langsmith"] = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     
-    # Verificar variáveis críticas
-    health_status["config"] = {
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
-    }
+    # Verificar variáveis Open AI
+    health_status["openai"] = bool(os.getenv("OPENAI_API_KEY"))
+    health_status["openai_model_pacient"] = os.getenv("OPENAI_MODEL")
+    health_status["openai_model_evaluator"] = os.getenv("OPENAI_MODEL_EVALUATOR")
     
     st.json(health_status)
     st.stop()
@@ -845,6 +837,7 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
 
