@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 st.set_page_config(page_title="ETHOS AI", page_icon="⚕️")
 load_dotenv()
 
+# Configuração do Langsmith
+if os.getenv("LANGSMITH_TRACING", "false").lower() == "true":
+    os.environ["LANGSMITH_TRACING"] = "true"
+    os.environ["LANGSMITH_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "ethos-ai")
+    os.environ["LANGSMITH_ENDPOINT"] = os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com")
+    os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
+    logger.info("✅ Langsmith tracing habilitado - Projeto: %s", os.getenv("LANGSMITH_PROJECT"))
+
 # --- 2. CONSTANTES E VALIDAÇÕES INICIAIS ---
 END_SESSION_CODE = "H7Y4K9P2R1T6X3Z0V8B5N7M3G"
 EVALUATION_METADATA_KEY = "is_evaluation"
@@ -804,3 +812,4 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
