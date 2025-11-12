@@ -13,7 +13,7 @@ services:
       - key: OPENAI_MODEL
         value: gpt-4o-mini
       - key: OPENAI_MODEL_EVALUATOR
-        value: gpt-4o
+        value: gpt-4o-mini
       - key: POSTGRES_USER
         sync: false
       - key: POSTGRES_PASSWORD
