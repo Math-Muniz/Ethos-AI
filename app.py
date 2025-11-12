@@ -788,6 +788,10 @@ with st.sidebar:
                             st.toast("🎉 Todas as 7 sessões concluídas!")
                     
                     st.rerun()
+                except TimeoutError:
+                    st.error("⏱️ Tempo limite excedido ao gerar avaliação. Tente novamente.")
+                except ConnectionError:
+                    st.error("🔌 Erro de conexão. Verifique sua internet.")
                 except Exception as e:
                     logger.error(f"Erro durante avaliação: {e}")
                     st.error(f"❌ Erro ao processar avaliação: {str(e)}")
@@ -856,6 +860,7 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
 
