@@ -440,6 +440,11 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
 
 # --- 8. INICIALIZAÇÃO ---
 setup_database()
+
+if not validate_db_connection():
+    st.error("❌ Não foi possível conectar ao banco de dados. Verifique as configurações.")
+    st.stop()
+
 patient_llm, evaluator_llm = get_llms()
 app, checkpointer = get_app_and_checkpointer(patient_llm, evaluator_llm)
 
@@ -851,6 +856,7 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
 
