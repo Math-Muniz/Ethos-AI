@@ -282,22 +282,6 @@ def setup_database():
         """
         CREATE INDEX IF NOT EXISTS idx_last_accessed 
         ON session_metadata(last_accessed)
-        """,
-        
-        # Tabela de métricas
-        """
-        CREATE TABLE IF NOT EXISTS session_metrics (
-            id SERIAL PRIMARY KEY,
-            thread_id TEXT REFERENCES session_metadata(thread_id) ON DELETE CASCADE,
-            session_number INTEGER NOT NULL,
-            message_count INTEGER,
-            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        
-        """
-        CREATE INDEX IF NOT EXISTS idx_metrics_thread 
-        ON session_metrics(thread_id, session_number)
         """
     ]
     
@@ -362,16 +346,6 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
             evaluation_prompt = EVALUATION_PROMPTS[session_number]
             response = _evaluator_llm.invoke(evaluation_prompt.format(transcript=transcript))
             
-            # Salvar métricas
-            try:
-                save_session_metrics(
-                    state.get("thread_id", "unknown"),
-                    session_number,
-                    len(filter_messages(session_messages))
-                )
-            except Exception as e:
-                logger.warning(f"Erro ao salvar métricas: {e}")
-            
             session_end_indices = state.get("session_end_indices", {}).copy()
             session_end_indices[session_number] = len(state["messages"]) + 1
             
@@ -414,18 +388,8 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
 
 # --- 7. FUNÇÕES DE MÉTRICAS ---
 
-def save_session_metrics(thread_id: str, session_number: int, message_count: int):
-    query = """
-        INSERT INTO session_metrics (thread_id, session_number, message_count)
-        VALUES (%s, %s, %s)
-        ON CONFLICT DO NOTHING
-    """
-    try:
-        execute_db_query(query, (thread_id, session_number, message_count))
-    except Exception as e:
-        logger.warning(f"Erro ao salvar métricas: {e}")
-
 def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
+    """Atualiza estatísticas consolidadas da sessão."""
     query = """
         UPDATE session_metadata 
         SET session_count = %s, 
@@ -435,6 +399,7 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
     """
     try:
         execute_db_query(query, (session_num, total_msgs, thread_id))
+        logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}")
     except Exception as e:
         logger.warning(f"Erro ao atualizar stats: {e}")
 
@@ -776,9 +741,10 @@ with st.sidebar:
                         if "session_end_indices" in response:
                             st.session_state.session_end_indices = response["session_end_indices"]
                         
+                        # Atualizar estatísticas consolidadas
                         update_session_stats(
                             st.session_state.thread_id,
-                            new_session_num - 1,
+                            new_session_num - 1,  # Sessão que acabou de ser avaliada
                             len(st.session_state.messages)
                         )
                         
