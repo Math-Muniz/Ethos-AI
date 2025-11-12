@@ -42,11 +42,31 @@ if os.getenv("LANGSMITH_TRACING", "false").lower() == "true":
 
 # --- HEALTH CHECK ENDPOINT ---
 if st.query_params.get("health") == "check":
-    st.json({
-        "status": "healthy", 
-        "timestamp": datetime.now().isoformat(),
-        "langsmith": os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
-    })
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "ETHOS AI",
+        "version": "1.0.0"
+    }
+    
+    # Verificar conexão com banco
+    try:
+        db_ok = validate_db_connection()
+        health_status["database"] = "connected" if db_ok else "disconnected"
+    except:
+        health_status["database"] = "error"
+        health_status["status"] = "unhealthy"
+    
+    # Verificar LangSmith
+    health_status["langsmith"] = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
+    
+    # Verificar variáveis críticas
+    health_status["config"] = {
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "allowed_users_count": len(ALLOWED_USER_IDS)
+    }
+    
+    st.json(health_status)
     st.stop()
 
 # --- CONSTANTES E VALIDAÇÕES INICIAIS ---
@@ -826,4 +846,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
