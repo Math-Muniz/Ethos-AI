@@ -26,13 +26,13 @@ from prompts import (
     EVALUATION_SESSION_7
 )
 
-# --- 1. CONFIGURAÇÃO INICIAL E LOGGING ---
+# --- CONFIGURAÇÃO INICIAL E LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 st.set_page_config(page_title="ETHOS AI", page_icon="⚕️")
 load_dotenv()
 
-# Configuração do Langsmith
+# --- CONFIGURAÇÃO LANGSMITH ---
 if os.getenv("LANGSMITH_TRACING", "false").lower() == "true":
     os.environ["LANGSMITH_TRACING"] = "true"
     os.environ["LANGSMITH_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "ethos-ai")
@@ -40,7 +40,16 @@ if os.getenv("LANGSMITH_TRACING", "false").lower() == "true":
     os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
     logger.info("✅ Langsmith tracing habilitado - Projeto: %s", os.getenv("LANGSMITH_PROJECT"))
 
-# --- 2. CONSTANTES E VALIDAÇÕES INICIAIS ---
+# --- HEALTH CHECK ENDPOINT ---
+if st.query_params.get("health") == "check":
+    st.json({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "langsmith": os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
+    })
+    st.stop()
+
+# --- CONSTANTES E VALIDAÇÕES INICIAIS ---
 END_SESSION_CODE = "H7Y4K9P2R1T6X3Z0V8B5N7M3G"
 EVALUATION_METADATA_KEY = "is_evaluation"
 BRAZIL_TZ = timezone(timedelta(hours=-3))
@@ -812,4 +821,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
