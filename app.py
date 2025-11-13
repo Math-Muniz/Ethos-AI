@@ -839,6 +839,3 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
 
 
-
-
-
