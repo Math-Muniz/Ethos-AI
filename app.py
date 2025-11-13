@@ -618,7 +618,7 @@ if url_thread_id and url_thread_id != current_thread_id:
 elif "thread_id" not in st.session_state:
     initialize_session(url_thread_id)
 
-st.title("ETHOS AI")
+st.markdown("<h1 style='text-align: center;'>ETHOS AI</h1>", unsafe_allow_html=True)
 
 # --- 12. INTERFACE ---
 
@@ -837,6 +837,7 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
 
