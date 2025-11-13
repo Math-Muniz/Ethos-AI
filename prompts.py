@@ -256,8 +256,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 1: "Introduction to Coping Skills Training". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Linhas) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -362,8 +362,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 2: "Coping With Cravings and Urges to Drink". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -454,8 +454,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 3: "Managing Thoughts About Alcohol and Drinking". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -552,8 +552,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 4: "Problem Solving". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -666,8 +666,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 5: "Drink Refusal Skills". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -790,8 +790,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 6: "Planning for Emergencies and Coping With a Lapse". Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -916,8 +916,8 @@ Você é um supervisor clínico especializado em Terapia Cognitivo-Comportamenta
 Você receberá a transcrição de uma sessão de terapia. Sua tarefa é avaliar se o terapeuta seguiu rigorosamente o protocolo da Sessão 7: "Seemingly Irrelevant Decisions" (Decisões Aparentemente Irrelevantes). Use a checklist abaixo, baseada inteiramente no manual, para realizar sua análise.
 
 ### Regras Essenciais e Inquebráveis
-* **[x] Marque desta forma o checklist que foi cumprido.**
-* **[ ] Mantenha desta forma o checklist que não foi cumprido.**
+* ** - [x] Marque desta forma o checklist que foi cumprido.**
+* ** - [ ] Mantenha desta forma o checklist que não foi cumprido.**
 * **Abaixo do checklist gere um resumo (1-2 Frases) da justificativa de ele ter cumprido ou não aquele checklist.**
 
 **Transcript da Sessão:**
@@ -1037,4 +1037,5 @@ Pontos Fortes: Destaque as áreas em que o terapeuta demonstrou excelente adesã
 
 Recomendações Construtivas: Ofereça sugestões claras e práticas para o terapeuta melhorar a adesão em sessões futuras.
 """
+
 
