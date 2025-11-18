@@ -284,6 +284,19 @@ def setup_database():
         END $$;
         """,
         
+        # ✅ EDITADO: Adicionar coluna session_complete se não existir
+        """
+        DO $$ 
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name='session_metadata' AND column_name='session_complete'
+            ) THEN
+                ALTER TABLE session_metadata ADD COLUMN session_complete BOOLEAN DEFAULT FALSE;
+            END IF;
+        END $$;
+        """,
+        
         # Índices
         """
         CREATE INDEX IF NOT EXISTS idx_user_sessions 
@@ -399,18 +412,24 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
 
 # --- 7. FUNÇÕES DE MÉTRICAS ---
 
+# ✅ EDITADO: Função update_session_stats agora inclui session_complete
 def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
     """Atualiza estatísticas consolidadas da sessão."""
+    # Determina se a sessão está completa (chegou à sessão 7 ou superior)
+    is_complete = session_num >= 7
+    
     query = """
         UPDATE session_metadata 
         SET session_count = %s, 
             total_messages = %s,
+            session_complete = %s,
             last_accessed = CURRENT_TIMESTAMP
         WHERE thread_id = %s
     """
     try:
-        execute_db_query(query, (session_num, total_msgs, thread_id))
-        logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}")
+        execute_db_query(query, (session_num, total_msgs, is_complete, thread_id))
+        status = "COMPLETA" if is_complete else "EM ANDAMENTO"
+        logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}, status={status}")
     except Exception as e:
         logger.warning(f"Erro ao atualizar stats: {e}")
 
@@ -468,6 +487,7 @@ def show_unauthorized_page():
 
 # --- 10. FUNÇÕES DE SESSÃO ---
 
+# ✅ EDITADO: get_recent_sessions agora inclui session_complete no SELECT
 def get_recent_sessions(limit: int = 50) -> List[Dict]:
     query = """
         SELECT 
@@ -476,7 +496,8 @@ def get_recent_sessions(limit: int = 50) -> List[Dict]:
             created_at, 
             last_accessed,
             session_count,
-            total_messages
+            total_messages,
+            session_complete
         FROM session_metadata 
         WHERE user_id = %s
         ORDER BY created_at DESC 
@@ -857,6 +878,3 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
-
-
-
