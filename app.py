@@ -567,22 +567,38 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
     return False
 
 def initialize_session(thread_id: str = None, force_new: bool = False):
+    # Validação básica de UUID se fornecido
     if thread_id and not is_valid_uuid(thread_id):
         logger.warning(f"Thread ID inválido: {thread_id}")
-        st.warning("⚠️ Link inválido. Criando nova sessão...")
+        st.warning("⚠️ Link inválido. Verificando histórico...")
         thread_id = None
-    
+
+    # 1. CENÁRIO: Link direto com thread_id (ex: clicou no histórico ou link compartilhado)
     if thread_id and not force_new:
         if load_session_from_checkpoint(thread_id):
             return
-    
-    logger.info("Criando nova sessão")
+
+    # 2. CENÁRIO (NOVO): Link limpo (raiz) e não forçou novo paciente -> Tenta recuperar o último
+    if not thread_id and not force_new:
+        recent_sessions = get_recent_sessions(limit=1)
+        if recent_sessions:
+            last_thread_id = recent_sessions[0]['thread_id']
+            logger.info(f"URL sem thread. Retomando a última sessão encontrada: {last_thread_id}")
+            
+            if load_session_from_checkpoint(last_thread_id):
+                # Importante: Atualiza a URL para o usuário saber onde está
+                st.query_params.thread_id = last_thread_id
+                return
+
+    # 3. CENÁRIO: Novo Paciente (force_new=True) OU Primeira vez (sem histórico)
+    logger.info("Criando nova sessão (force_new=%s)", force_new)
     new_thread_id = str(uuid.uuid4())
     
     recent_sessions = get_recent_sessions(limit=1)
     
     if recent_sessions and len(recent_sessions) > 0:
         last_persona_name = recent_sessions[0]['persona_name']
+        # Rotaciona para o próximo apenas se for forçado ou se for uma criação real
         new_patient = get_next_persona(last_persona_name)
         logger.info(f"Última: {last_persona_name}, próximo: {new_patient['name']}")
     else:
@@ -598,7 +614,7 @@ def initialize_session(thread_id: str = None, force_new: bool = False):
     st.session_state.session_end_indices = {}
     
     st.query_params.thread_id = new_thread_id
-    logger.info(f"✅ Nova sessão: {new_thread_id}")
+    logger.info(f"✅ Nova sessão criada: {new_thread_id}")
     st.toast(f"✅ Novo paciente: {new_patient['name']}!")
 
 # --- 11. VALIDAÇÃO E INICIALIZAÇÃO ---
@@ -610,12 +626,16 @@ if not is_user_authorized(st.session_state.user_id):
 
 logger.info(f"✅ Usuário autorizado: {st.session_state.user_id}")
 
+# Lógica simplificada graças ao Exemplo 1
 url_thread_id = st.query_params.get("thread_id")
 current_thread_id = st.session_state.get("thread_id")
 
 if url_thread_id and url_thread_id != current_thread_id:
+    # Se a URL mudou, recarrega
     initialize_session(url_thread_id)
 elif "thread_id" not in st.session_state:
+    # Se não tem sessão carregada (mesmo que url_thread_id seja None), inicializa
+    # A função initialize_session vai decidir se recupera o histórico ou cria novo
     initialize_session(url_thread_id)
 
 st.markdown("<h1 style='text-align: center;'>ETHOS AI</h1>", unsafe_allow_html=True)
@@ -837,5 +857,6 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
