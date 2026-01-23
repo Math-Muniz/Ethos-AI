@@ -299,13 +299,45 @@ def setup_database():
         
         # Índices
         """
-        CREATE INDEX IF NOT EXISTS idx_user_sessions 
+        CREATE INDEX IF NOT EXISTS idx_user_sessions
         ON session_metadata(user_id, created_at DESC)
         """,
-        
+
         """
-        CREATE INDEX IF NOT EXISTS idx_last_accessed 
+        CREATE INDEX IF NOT EXISTS idx_last_accessed
         ON session_metadata(last_accessed)
+        """,
+
+        # Criar tabela conversation_log para análise de dissertação
+        """
+        CREATE TABLE IF NOT EXISTS conversation_log (
+            id SERIAL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            persona_name TEXT NOT NULL,
+            session_number INTEGER NOT NULL,
+            message_type TEXT NOT NULL,
+            message_content TEXT NOT NULL,
+            message_order INTEGER NOT NULL,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            metadata JSONB
+        )
+        """,
+
+        # Índices para conversation_log
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_thread
+        ON conversation_log(thread_id, message_order)
+        """,
+
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_user
+        ON conversation_log(user_id, timestamp DESC)
+        """,
+
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_persona
+        ON conversation_log(persona_name, session_number)
         """
     ]
     
@@ -432,6 +464,33 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
         logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}, status={status}")
     except Exception as e:
         logger.warning(f"Erro ao atualizar stats: {e}")
+
+def log_conversation_message(
+    thread_id: str,
+    user_id: str,
+    persona_name: str,
+    session_number: int,
+    message_type: str,
+    message_content: str,
+    message_order: int,
+    metadata: Dict = None
+):
+    """Salva mensagem individual na tabela conversation_log para análise."""
+    query = """
+        INSERT INTO conversation_log
+        (thread_id, user_id, persona_name, session_number, message_type,
+         message_content, message_order, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    try:
+        import json
+        metadata_json = json.dumps(metadata) if metadata else None
+        execute_db_query(query, (
+            thread_id, user_id, persona_name, session_number,
+            message_type, message_content, message_order, metadata_json
+        ))
+    except Exception as e:
+        logger.warning(f"Erro ao logar mensagem: {e}")
 
 # --- 8. INICIALIZAÇÃO ---
 setup_database()
@@ -783,9 +842,22 @@ with st.sidebar:
                             }
                         }
                     )
-                    
-                    st.session_state.messages.append(response["messages"][-1])
-                    
+
+                    evaluation_message = response["messages"][-1]
+                    st.session_state.messages.append(evaluation_message)
+
+                    # Logar avaliação
+                    log_conversation_message(
+                        thread_id=st.session_state.thread_id,
+                        user_id=st.session_state.user_id,
+                        persona_name=st.session_state.current_patient['name'],
+                        session_number=st.session_state.current_session_num,
+                        message_type='evaluation',
+                        message_content=evaluation_message.content,
+                        message_order=len(st.session_state.messages),
+                        metadata={'completed_session': st.session_state.current_session_num}
+                    )
+
                     if "current_session" in response:
                         new_session_num = response["current_session"]
                         st.session_state.current_session_num = new_session_num
@@ -844,6 +916,18 @@ if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.
         st.warning("⚠️ Por favor, digite uma mensagem válida.")
     else:
         st.session_state.messages.append(HumanMessage(content=prompt))
+
+        # Logar mensagem do terapeuta
+        log_conversation_message(
+            thread_id=st.session_state.thread_id,
+            user_id=st.session_state.user_id,
+            persona_name=st.session_state.current_patient['name'],
+            session_number=st.session_state.current_session_num,
+            message_type='therapist',
+            message_content=prompt,
+            message_order=len(st.session_state.messages)
+        )
+
         st.rerun()
 
 if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage) and END_SESSION_CODE not in st.session_state.messages[-1].content:
@@ -870,6 +954,18 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                 )
                 ai_response = response["messages"][-1]
                 st.session_state.messages.append(ai_response)
+
+                # Logar resposta do paciente
+                log_conversation_message(
+                    thread_id=st.session_state.thread_id,
+                    user_id=st.session_state.user_id,
+                    persona_name=st.session_state.current_patient['name'],
+                    session_number=st.session_state.current_session_num,
+                    message_type='patient',
+                    message_content=ai_response.content,
+                    message_order=len(st.session_state.messages)
+                )
+
                 st.rerun()
             except TimeoutError:
                 st.error("⏱️ Tempo limite excedido. Tente novamente.")
