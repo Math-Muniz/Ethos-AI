@@ -299,13 +299,45 @@ def setup_database():
         
         # Índices
         """
-        CREATE INDEX IF NOT EXISTS idx_user_sessions 
+        CREATE INDEX IF NOT EXISTS idx_user_sessions
         ON session_metadata(user_id, created_at DESC)
         """,
-        
+
         """
-        CREATE INDEX IF NOT EXISTS idx_last_accessed 
+        CREATE INDEX IF NOT EXISTS idx_last_accessed
         ON session_metadata(last_accessed)
+        """,
+
+        # Criar tabela conversation_log para análise de dissertação
+        """
+        CREATE TABLE IF NOT EXISTS conversation_log (
+            id SERIAL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            persona_name TEXT NOT NULL,
+            session_number INTEGER NOT NULL,
+            message_type TEXT NOT NULL,
+            message_content TEXT NOT NULL,
+            message_order INTEGER NOT NULL,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            metadata JSONB
+        )
+        """,
+
+        # Índices para conversation_log
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_thread
+        ON conversation_log(thread_id, message_order)
+        """,
+
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_user
+        ON conversation_log(user_id, timestamp DESC)
+        """,
+
+        """
+        CREATE INDEX IF NOT EXISTS idx_conversation_persona
+        ON conversation_log(persona_name, session_number)
         """
     ]
     
@@ -433,6 +465,33 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
     except Exception as e:
         logger.warning(f"Erro ao atualizar stats: {e}")
 
+def log_conversation_message(
+    thread_id: str,
+    user_id: str,
+    persona_name: str,
+    session_number: int,
+    message_type: str,
+    message_content: str,
+    message_order: int,
+    metadata: Dict = None
+):
+    """Salva mensagem individual na tabela conversation_log para análise."""
+    query = """
+        INSERT INTO conversation_log
+        (thread_id, user_id, persona_name, session_number, message_type,
+         message_content, message_order, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    try:
+        import json
+        metadata_json = json.dumps(metadata) if metadata else None
+        execute_db_query(query, (
+            thread_id, user_id, persona_name, session_number,
+            message_type, message_content, message_order, metadata_json
+        ))
+    except Exception as e:
+        logger.warning(f"Erro ao logar mensagem: {e}")
+
 # --- 8. INICIALIZAÇÃO ---
 setup_database()
 
@@ -529,21 +588,25 @@ def save_session_metadata(thread_id: str, persona_name: str):
 
 def load_session_metadata(thread_id: str) -> Optional[str]:
     query = """
-        SELECT persona_name 
-        FROM session_metadata 
+        SELECT persona_name
+        FROM session_metadata
         WHERE thread_id = %s AND user_id = %s
     """
     try:
         user_id = st.session_state.user_id
+        logger.info(f"Tentando carregar metadados: thread_id={thread_id}, user_id={user_id}")
         results = execute_db_query(query, (thread_id, user_id), fetch=True)
-        
+
         if results and len(results) > 0:
             update_query = "UPDATE session_metadata SET last_accessed = CURRENT_TIMESTAMP WHERE thread_id = %s"
             execute_db_query(update_query, (thread_id,))
+            logger.info(f"✅ Metadados encontrados: persona={results[0]['persona_name']}")
             return results[0]['persona_name']
+        else:
+            logger.warning(f"❌ Nenhum metadado encontrado para thread_id={thread_id}, user_id={user_id}")
     except Exception as e:
         logger.error(f"Erro ao carregar metadados: {e}")
-    
+
     return None
 
 def load_session_from_checkpoint(thread_id: str) -> bool:
@@ -588,6 +651,8 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
     return False
 
 def initialize_session(thread_id: str = None, force_new: bool = False):
+    logger.info(f"🔄 initialize_session chamado: thread_id={thread_id}, force_new={force_new}")
+
     # Validação básica de UUID se fornecido
     if thread_id and not is_valid_uuid(thread_id):
         logger.warning(f"Thread ID inválido: {thread_id}")
@@ -596,8 +661,12 @@ def initialize_session(thread_id: str = None, force_new: bool = False):
 
     # 1. CENÁRIO: Link direto com thread_id (ex: clicou no histórico ou link compartilhado)
     if thread_id and not force_new:
+        logger.info(f"Tentando carregar sessão existente: {thread_id}")
         if load_session_from_checkpoint(thread_id):
+            logger.info(f"✅ Sessão carregada com sucesso!")
             return
+        else:
+            logger.warning(f"❌ Falha ao carregar sessão {thread_id}, criando nova...")
 
     # 2. CENÁRIO (NOVO): Link limpo (raiz) e não forçou novo paciente -> Tenta recuperar o último
     if not thread_id and not force_new:
@@ -648,16 +717,23 @@ if not is_user_authorized(st.session_state.user_id):
 logger.info(f"✅ Usuário autorizado: {st.session_state.user_id}")
 
 # Lógica simplificada graças ao Exemplo 1
-url_thread_id = st.query_params.get("thread_id")
-current_thread_id = st.session_state.get("thread_id")
+# Prioridade 1: Se foi marcado para carregar uma sessão específica
+if "_load_thread_id" in st.session_state:
+    thread_to_load = st.session_state._load_thread_id
+    del st.session_state._load_thread_id  # Limpar flag
+    logger.info(f"Carregando sessão marcada: {thread_to_load}")
+    initialize_session(thread_to_load)
+else:
+    url_thread_id = st.query_params.get("thread_id")
+    current_thread_id = st.session_state.get("thread_id")
 
-if url_thread_id and url_thread_id != current_thread_id:
-    # Se a URL mudou, recarrega
-    initialize_session(url_thread_id)
-elif "thread_id" not in st.session_state:
-    # Se não tem sessão carregada (mesmo que url_thread_id seja None), inicializa
-    # A função initialize_session vai decidir se recupera o histórico ou cria novo
-    initialize_session(url_thread_id)
+    if url_thread_id and url_thread_id != current_thread_id:
+        # Se a URL mudou, recarrega
+        initialize_session(url_thread_id)
+    elif "thread_id" not in st.session_state:
+        # Se não tem sessão carregada (mesmo que url_thread_id seja None), inicializa
+        # A função initialize_session vai decidir se recupera o histórico ou cria novo
+        initialize_session(url_thread_id)
 
 st.markdown("<h1 style='text-align: center;'>ETHOS AI</h1>", unsafe_allow_html=True)
 
@@ -721,11 +797,16 @@ with st.sidebar:
                 disabled=is_current,
                 help=time_str
             ):
-                for key in ['messages', 'current_session_num', 'session_end_indices', 
+                # Marcar para carregar sessão específica
+                st.session_state._load_thread_id = thread_id
+
+                # Limpar session state
+                for key in ['messages', 'current_session_num', 'session_end_indices',
                         'thread_id', 'current_patient']:
                     if key in st.session_state:
                         del st.session_state[key]
-                
+
+                # Atualizar URL
                 st.query_params.thread_id = thread_id
                 st.rerun()
     else:
@@ -783,9 +864,22 @@ with st.sidebar:
                             }
                         }
                     )
-                    
-                    st.session_state.messages.append(response["messages"][-1])
-                    
+
+                    evaluation_message = response["messages"][-1]
+                    st.session_state.messages.append(evaluation_message)
+
+                    # Logar avaliação
+                    log_conversation_message(
+                        thread_id=st.session_state.thread_id,
+                        user_id=st.session_state.user_id,
+                        persona_name=st.session_state.current_patient['name'],
+                        session_number=st.session_state.current_session_num,
+                        message_type='evaluation',
+                        message_content=evaluation_message.content,
+                        message_order=len(st.session_state.messages),
+                        metadata={'completed_session': st.session_state.current_session_num}
+                    )
+
                     if "current_session" in response:
                         new_session_num = response["current_session"]
                         st.session_state.current_session_num = new_session_num
@@ -844,6 +938,18 @@ if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.
         st.warning("⚠️ Por favor, digite uma mensagem válida.")
     else:
         st.session_state.messages.append(HumanMessage(content=prompt))
+
+        # Logar mensagem do terapeuta
+        log_conversation_message(
+            thread_id=st.session_state.thread_id,
+            user_id=st.session_state.user_id,
+            persona_name=st.session_state.current_patient['name'],
+            session_number=st.session_state.current_session_num,
+            message_type='therapist',
+            message_content=prompt,
+            message_order=len(st.session_state.messages)
+        )
+
         st.rerun()
 
 if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage) and END_SESSION_CODE not in st.session_state.messages[-1].content:
@@ -870,6 +976,18 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                 )
                 ai_response = response["messages"][-1]
                 st.session_state.messages.append(ai_response)
+
+                # Logar resposta do paciente
+                log_conversation_message(
+                    thread_id=st.session_state.thread_id,
+                    user_id=st.session_state.user_id,
+                    persona_name=st.session_state.current_patient['name'],
+                    session_number=st.session_state.current_session_num,
+                    message_type='patient',
+                    message_content=ai_response.content,
+                    message_order=len(st.session_state.messages)
+                )
+
                 st.rerun()
             except TimeoutError:
                 st.error("⏱️ Tempo limite excedido. Tente novamente.")
