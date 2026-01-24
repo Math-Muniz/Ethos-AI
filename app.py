@@ -588,21 +588,25 @@ def save_session_metadata(thread_id: str, persona_name: str):
 
 def load_session_metadata(thread_id: str) -> Optional[str]:
     query = """
-        SELECT persona_name 
-        FROM session_metadata 
+        SELECT persona_name
+        FROM session_metadata
         WHERE thread_id = %s AND user_id = %s
     """
     try:
         user_id = st.session_state.user_id
+        logger.info(f"Tentando carregar metadados: thread_id={thread_id}, user_id={user_id}")
         results = execute_db_query(query, (thread_id, user_id), fetch=True)
-        
+
         if results and len(results) > 0:
             update_query = "UPDATE session_metadata SET last_accessed = CURRENT_TIMESTAMP WHERE thread_id = %s"
             execute_db_query(update_query, (thread_id,))
+            logger.info(f"✅ Metadados encontrados: persona={results[0]['persona_name']}")
             return results[0]['persona_name']
+        else:
+            logger.warning(f"❌ Nenhum metadado encontrado para thread_id={thread_id}, user_id={user_id}")
     except Exception as e:
         logger.error(f"Erro ao carregar metadados: {e}")
-    
+
     return None
 
 def load_session_from_checkpoint(thread_id: str) -> bool:
@@ -647,6 +651,8 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
     return False
 
 def initialize_session(thread_id: str = None, force_new: bool = False):
+    logger.info(f"🔄 initialize_session chamado: thread_id={thread_id}, force_new={force_new}")
+
     # Validação básica de UUID se fornecido
     if thread_id and not is_valid_uuid(thread_id):
         logger.warning(f"Thread ID inválido: {thread_id}")
@@ -655,8 +661,12 @@ def initialize_session(thread_id: str = None, force_new: bool = False):
 
     # 1. CENÁRIO: Link direto com thread_id (ex: clicou no histórico ou link compartilhado)
     if thread_id and not force_new:
+        logger.info(f"Tentando carregar sessão existente: {thread_id}")
         if load_session_from_checkpoint(thread_id):
+            logger.info(f"✅ Sessão carregada com sucesso!")
             return
+        else:
+            logger.warning(f"❌ Falha ao carregar sessão {thread_id}, criando nova...")
 
     # 2. CENÁRIO (NOVO): Link limpo (raiz) e não forçou novo paciente -> Tenta recuperar o último
     if not thread_id and not force_new:
@@ -707,16 +717,23 @@ if not is_user_authorized(st.session_state.user_id):
 logger.info(f"✅ Usuário autorizado: {st.session_state.user_id}")
 
 # Lógica simplificada graças ao Exemplo 1
-url_thread_id = st.query_params.get("thread_id")
-current_thread_id = st.session_state.get("thread_id")
+# Prioridade 1: Se foi marcado para carregar uma sessão específica
+if "_load_thread_id" in st.session_state:
+    thread_to_load = st.session_state._load_thread_id
+    del st.session_state._load_thread_id  # Limpar flag
+    logger.info(f"Carregando sessão marcada: {thread_to_load}")
+    initialize_session(thread_to_load)
+else:
+    url_thread_id = st.query_params.get("thread_id")
+    current_thread_id = st.session_state.get("thread_id")
 
-if url_thread_id and url_thread_id != current_thread_id:
-    # Se a URL mudou, recarrega
-    initialize_session(url_thread_id)
-elif "thread_id" not in st.session_state:
-    # Se não tem sessão carregada (mesmo que url_thread_id seja None), inicializa
-    # A função initialize_session vai decidir se recupera o histórico ou cria novo
-    initialize_session(url_thread_id)
+    if url_thread_id and url_thread_id != current_thread_id:
+        # Se a URL mudou, recarrega
+        initialize_session(url_thread_id)
+    elif "thread_id" not in st.session_state:
+        # Se não tem sessão carregada (mesmo que url_thread_id seja None), inicializa
+        # A função initialize_session vai decidir se recupera o histórico ou cria novo
+        initialize_session(url_thread_id)
 
 st.markdown("<h1 style='text-align: center;'>ETHOS AI</h1>", unsafe_allow_html=True)
 
@@ -780,11 +797,16 @@ with st.sidebar:
                 disabled=is_current,
                 help=time_str
             ):
-                for key in ['messages', 'current_session_num', 'session_end_indices', 
+                # Marcar para carregar sessão específica
+                st.session_state._load_thread_id = thread_id
+
+                # Limpar session state
+                for key in ['messages', 'current_session_num', 'session_end_indices',
                         'thread_id', 'current_patient']:
                     if key in st.session_state:
                         del st.session_state[key]
-                
+
+                # Atualizar URL
                 st.query_params.thread_id = thread_id
                 st.rerun()
     else:
