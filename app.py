@@ -13,6 +13,13 @@ from langgraph.graph import StateGraph, add_messages, END, START
 from langgraph.checkpoint.postgres import PostgresSaver
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+try:
+    import orjson
+    USE_ORJSON = True
+except ImportError:
+    import json
+    USE_ORJSON = False
 from prompts import (
     PERSONA_RAFAEL, 
     PERSONA_CLARA, 
@@ -61,6 +68,7 @@ if st.query_params.get("health") == "check":
     st.stop()
 
 # --- CONSTANTES E VALIDAÇÕES INICIAIS ---
+NUM_SESSIONS = 7  # Número total de sessões terapêuticas
 END_SESSION_CODE = "H7Y4K9P2R1T6X3Z0V8B5N7M3G"
 EVALUATION_METADATA_KEY = "is_evaluation"
 BRAZIL_TZ = timezone(timedelta(hours=-3))
@@ -97,6 +105,10 @@ PERSONAS_DATA = [
     {"name": "Luiz", "prompt": PERSONA_LUIZ, "order": 2},
     {"name": "Rafael", "prompt": PERSONA_RAFAEL, "order": 3},
 ]
+
+# Dicionários de lookup O(1) para personas
+PERSONAS_BY_NAME = {p["name"]: p for p in PERSONAS_DATA}
+PERSONAS_BY_ORDER = {p["order"]: p for p in PERSONAS_DATA}
 
 EVALUATION_PROMPTS = {
     1: EVALUATION_SESSION_1,
@@ -143,45 +155,61 @@ def get_session_messages(state: AgentState, session_number: int) -> List[BaseMes
 
 def route_entry_point(state: AgentState) -> str:
     last_message = state["messages"][-1] if state["messages"] else None
-    
+
     if isinstance(last_message, HumanMessage) and END_SESSION_CODE in last_message.content:
         current_session = state.get("current_session", 1)
-        
-        if current_session == 1:
-            return "evaluate_session_1"
-        elif current_session == 2:
-            return "evaluate_session_2"
-        elif current_session == 3:
-            return "evaluate_session_3"
-        elif current_session == 4:
-            return "evaluate_session_4"
-        elif current_session == 5:
-            return "evaluate_session_5"
-        elif current_session == 6:
-            return "evaluate_session_6"
-        elif current_session == 7:
-            return "evaluate_session_7"
-    
+        if 1 <= current_session <= NUM_SESSIONS:
+            return f"evaluate_session_{current_session}"
+
     return "patient_node"
 
 def get_next_persona(current_persona_name: str) -> Dict:
-    current_persona = next((p for p in PERSONAS_DATA if p["name"] == current_persona_name), None)
-    
+    current_persona = PERSONAS_BY_NAME.get(current_persona_name)
+
     if not current_persona:
         return PERSONAS_DATA[0]
-    
-    current_order = current_persona["order"]
-    next_persona = next((p for p in PERSONAS_DATA if p["order"] == current_order + 1), None)
-    
-    if not next_persona:
-        next_persona = PERSONAS_DATA[0]
-    
-    return next_persona
 
-# --- 5. CONEXÃO SUPABASE (IPv4 Pooler) ---
+    current_order = current_persona["order"]
+    next_persona = PERSONAS_BY_ORDER.get(current_order + 1)
+
+    return next_persona if next_persona else PERSONAS_DATA[0]
+
+# --- 5. CONEXÃO SUPABASE (IPv4 Pooler) COM CONNECTION POOLING ---
+
+def _get_connection_string() -> str:
+    """Retorna a string de conexão para o PostgreSQL."""
+    return (
+        f"user={os.getenv('POSTGRES_USER')} "
+        f"password={os.getenv('POSTGRES_PASSWORD')} "
+        f"host={os.getenv('POSTGRES_HOST')} "
+        f"port={os.getenv('POSTGRES_PORT')} "
+        f"dbname={os.getenv('POSTGRES_DB')} "
+        f"connect_timeout=10"
+    )
+
+# Pool de conexões global - reutiliza conexões em vez de criar novas
+_db_pool: Optional[ConnectionPool] = None
+
+def get_db_pool() -> ConnectionPool:
+    """Retorna o pool de conexões, criando-o se necessário."""
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = ConnectionPool(
+            conninfo=_get_connection_string(),
+            min_size=2,
+            max_size=10,
+            kwargs={
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5
+            }
+        )
+        logger.info("✅ Connection pool criado (min=2, max=10)")
+    return _db_pool
 
 def create_supabase_connection():
-    """Cria conexão otimizada com Supabase usando IPv4 pooler."""
+    """Cria conexão direta (para checkpointer e operações que precisam de conexão dedicada)."""
     return psycopg.connect(
         user=os.getenv("POSTGRES_USER"),
         password=os.getenv("POSTGRES_PASSWORD"),
@@ -196,41 +224,35 @@ def create_supabase_connection():
     )
 
 def execute_db_query(query: str, params: tuple = None, fetch: bool = False):
-    """Executa query com retry automático."""
+    """Executa query usando connection pool com retry automático."""
+    import time
     max_retries = 3
     retry_delay = 1
-    
+    pool = get_db_pool()
+
     for attempt in range(max_retries):
-        conn = None
         try:
-            conn = create_supabase_connection()
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, params or ())
-                
-                if fetch:
-                    results = cur.fetchall()
-                    conn.commit()
-                    return results
-                else:
-                    conn.commit()
-                    return None
-        
+            with pool.connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(query, params or ())
+
+                    if fetch:
+                        results = cur.fetchall()
+                        conn.commit()
+                        return results
+                    else:
+                        conn.commit()
+                        return None
+
         except Exception as e:
             logger.warning(f"Tentativa {attempt + 1}/{max_retries} falhou: {e}")
-            
+
             if attempt < max_retries - 1:
-                import time
                 time.sleep(retry_delay)
                 retry_delay *= 2
             else:
                 logger.error(f"Erro após {max_retries} tentativas: {e}")
                 raise
-        finally:
-            if conn:
-                try:
-                    conn.close()
-                except:
-                    pass
                     
 def validate_db_connection():
     """Valida se a conexão com o banco está funcionando."""
@@ -416,7 +438,7 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     workflow = StateGraph(AgentState)
     workflow.add_node("patient_node", patient_node)
     
-    for i in range(1, 8):
+    for i in range(1, NUM_SESSIONS + 1):
         workflow.add_node(f"evaluation_{i}_node", create_evaluation_node(i))
     
     workflow.add_conditional_edges(
@@ -435,11 +457,11 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     )
     
     workflow.add_edge("patient_node", END)
-    for i in range(1, 8):
+    for i in range(1, NUM_SESSIONS + 1):
         workflow.add_edge(f"evaluation_{i}_node", END)
-    
+
     app = workflow.compile(checkpointer=checkpointer)
-    logger.info("✅ Aplicação LangGraph compilada com 7 sessões")
+    logger.info(f"✅ Aplicação LangGraph compilada com {NUM_SESSIONS} sessões")
     return app, checkpointer
 
 # --- 7. FUNÇÕES DE MÉTRICAS ---
@@ -447,8 +469,8 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
 # ✅ EDITADO: Função update_session_stats agora inclui session_complete
 def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
     """Atualiza estatísticas consolidadas da sessão."""
-    # Determina se a sessão está completa (chegou à sessão 7 ou superior)
-    is_complete = session_num >= 7
+    # Determina se a sessão está completa (chegou à última sessão ou superior)
+    is_complete = session_num >= NUM_SESSIONS
     
     query = """
         UPDATE session_metadata 
@@ -464,6 +486,16 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
         logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}, status={status}")
     except Exception as e:
         logger.warning(f"Erro ao atualizar stats: {e}")
+
+def _serialize_json(data: Dict) -> Optional[str]:
+    """Serializa dados para JSON usando orjson se disponível (3-5x mais rápido)."""
+    if data is None:
+        return None
+    if USE_ORJSON:
+        return orjson.dumps(data).decode('utf-8')
+    else:
+        import json
+        return json.dumps(data)
 
 def log_conversation_message(
     thread_id: str,
@@ -483,8 +515,7 @@ def log_conversation_message(
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     try:
-        import json
-        metadata_json = json.dumps(metadata) if metadata else None
+        metadata_json = _serialize_json(metadata)
         execute_db_query(query, (
             thread_id, user_id, persona_name, session_number,
             message_type, message_content, message_order, metadata_json
@@ -587,10 +618,12 @@ def save_session_metadata(thread_id: str, persona_name: str):
         logger.error(f"Erro ao salvar metadados: {e}")
 
 def load_session_metadata(thread_id: str) -> Optional[str]:
+    # Query combinada: UPDATE + RETURNING evita duas round-trips ao banco
     query = """
-        SELECT persona_name
-        FROM session_metadata
+        UPDATE session_metadata
+        SET last_accessed = CURRENT_TIMESTAMP
         WHERE thread_id = %s AND user_id = %s
+        RETURNING persona_name
     """
     try:
         user_id = st.session_state.user_id
@@ -598,8 +631,6 @@ def load_session_metadata(thread_id: str) -> Optional[str]:
         results = execute_db_query(query, (thread_id, user_id), fetch=True)
 
         if results and len(results) > 0:
-            update_query = "UPDATE session_metadata SET last_accessed = CURRENT_TIMESTAMP WHERE thread_id = %s"
-            execute_db_query(update_query, (thread_id,))
             logger.info(f"✅ Metadados encontrados: persona={results[0]['persona_name']}")
             return results[0]['persona_name']
         else:
@@ -612,12 +643,13 @@ def load_session_metadata(thread_id: str) -> Optional[str]:
 def load_session_from_checkpoint(thread_id: str) -> bool:
     try:
         logger.info(f"Carregando sessão: {thread_id}")
-        
+
         persona_name = load_session_metadata(thread_id)
         if not persona_name:
             return False
-        
-        persona_data = next((p for p in PERSONAS_DATA if p["name"] == persona_name), None)
+
+        # Lookup O(1) usando dicionário em vez de busca linear
+        persona_data = PERSONAS_BY_NAME.get(persona_name)
         if not persona_data:
             return False
         
@@ -668,13 +700,15 @@ def initialize_session(thread_id: str = None, force_new: bool = False):
         else:
             logger.warning(f"❌ Falha ao carregar sessão {thread_id}, criando nova...")
 
+    # Cache de recent_sessions para evitar múltiplas queries na mesma inicialização
+    recent_sessions = get_recent_sessions(limit=1)
+
     # 2. CENÁRIO (NOVO): Link limpo (raiz) e não forçou novo paciente -> Tenta recuperar o último
     if not thread_id and not force_new:
-        recent_sessions = get_recent_sessions(limit=1)
         if recent_sessions:
             last_thread_id = recent_sessions[0]['thread_id']
             logger.info(f"URL sem thread. Retomando a última sessão encontrada: {last_thread_id}")
-            
+
             if load_session_from_checkpoint(last_thread_id):
                 # Importante: Atualiza a URL para o usuário saber onde está
                 st.query_params.thread_id = last_thread_id
@@ -683,9 +717,8 @@ def initialize_session(thread_id: str = None, force_new: bool = False):
     # 3. CENÁRIO: Novo Paciente (force_new=True) OU Primeira vez (sem histórico)
     logger.info("Criando nova sessão (force_new=%s)", force_new)
     new_thread_id = str(uuid.uuid4())
-    
-    recent_sessions = get_recent_sessions(limit=1)
-    
+
+    # Reutiliza recent_sessions já carregado (evita segunda query)
     if recent_sessions and len(recent_sessions) > 0:
         last_persona_name = recent_sessions[0]['persona_name']
         # Rotaciona para o próximo apenas se for forçado ou se for uma criação real
@@ -744,16 +777,16 @@ with st.sidebar:
     components.html(CLOCK_HTML, height=65)
     
     st.header("Status da Simulação")
-    if st.session_state.current_session_num <= 7:
+    if st.session_state.current_session_num <= NUM_SESSIONS:
         st.info(
-            f"Sessão: **{st.session_state.current_session_num}/7** | "
-            f"Paciente: **{st.session_state.current_patient['name']}**", 
+            f"Sessão: **{st.session_state.current_session_num}/{NUM_SESSIONS}** | "
+            f"Paciente: **{st.session_state.current_patient['name']}**",
             icon="⚠️"
         )
-        progress = (st.session_state.current_session_num - 1) / 7
+        progress = (st.session_state.current_session_num - 1) / NUM_SESSIONS
         st.progress(progress)
     else:
-        st.success("✅ Todas as 7 sessões concluídas!", icon="🎉")
+        st.success(f"✅ Todas as {NUM_SESSIONS} sessões concluídas!", icon="🎉")
     
     with st.expander("ℹ️ Informações de Acesso", expanded=False):
         st.caption(f"✅ Acesso Autorizado")
@@ -842,7 +875,7 @@ with st.sidebar:
         else:
             st.button("💾 Download", use_container_width=True, disabled=True)
     
-    if st.session_state.current_session_num <= 7:
+    if st.session_state.current_session_num <= NUM_SESSIONS:
         if st.button("🏁 Encerrar Sessão e Avaliar", type="primary", use_container_width=True):
             with st.spinner("⏳ Gerando avaliação detalhada..."):
                 try:
@@ -894,10 +927,10 @@ with st.sidebar:
                             len(st.session_state.messages)
                         )
                         
-                        if new_session_num <= 7:
+                        if new_session_num <= NUM_SESSIONS:
                             st.toast(f"✅ Sessão {new_session_num - 1} avaliada! Iniciando Sessão {new_session_num}...")
                         else:
-                            st.toast("🎉 Todas as 7 sessões concluídas!")
+                            st.toast(f"🎉 Todas as {NUM_SESSIONS} sessões concluídas!")
                     
                     st.rerun()
                 except TimeoutError:
@@ -912,6 +945,9 @@ with st.sidebar:
 
 session_end_indices = st.session_state.get("session_end_indices", {})
 
+# Dicionário reverso O(1) para lookup: índice -> número da sessão (evita loop O(n×7))
+index_to_session = {(idx - 1): session_num for session_num, idx in session_end_indices.items()}
+
 for i, msg in enumerate(st.session_state.messages):
     if isinstance(msg, AIMessage) and msg.response_metadata.get(EVALUATION_METADATA_KEY):
         with st.chat_message("assistant", avatar="📋"):
@@ -920,20 +956,21 @@ for i, msg in enumerate(st.session_state.messages):
         st.chat_message("assistant", avatar="🧑‍⚕️").write(msg.content)
     elif isinstance(msg, HumanMessage) and END_SESSION_CODE not in msg.content:
         st.chat_message("user", avatar="👨‍💻").write(msg.content)
-    
-    for session_num in range(1, 8):
-        if session_num in session_end_indices and i == session_end_indices[session_num] - 1:
-            st.divider()
-            if session_num < 7:
-                st.subheader(f"🔄 Sessão {session_num + 1}")
-            else:
-                st.subheader("✅ Fim da Simulação")
-                st.info("💡 Use 'Download' para salvar ou 'Novo Paciente' para continuar.", icon="ℹ️")
-            st.divider()
+
+    # Lookup O(1) em vez de loop O(7)
+    if i in index_to_session:
+        session_num = index_to_session[i]
+        st.divider()
+        if session_num < NUM_SESSIONS:
+            st.subheader(f"🔄 Sessão {session_num + 1}")
+        else:
+            st.subheader("✅ Fim da Simulação")
+            st.info("💡 Use 'Download' para salvar ou 'Novo Paciente' para continuar.", icon="ℹ️")
+        st.divider()
 
 # --- 14. INPUT DO CHAT ---
 
-if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.current_session_num > 7)):
+if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.current_session_num > NUM_SESSIONS)):
     if not prompt.strip():
         st.warning("⚠️ Por favor, digite uma mensagem válida.")
     else:
