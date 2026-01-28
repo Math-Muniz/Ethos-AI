@@ -141,7 +141,17 @@ def filter_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
     return [msg for msg in messages if not (isinstance(msg, HumanMessage) and END_SESSION_CODE in msg.content) and not (isinstance(msg, AIMessage) and msg.response_metadata.get(EVALUATION_METADATA_KEY))]
 
 def create_transcript(messages: List[BaseMessage]) -> str:
-    return "\n".join([f"{'Terapeuta' if isinstance(msg, HumanMessage) else 'Paciente'}: {msg.content}" for msg in messages])
+    lines = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            if END_SESSION_CODE in msg.content:
+                continue
+            lines.append(f"Terapeuta: {msg.content}")
+        elif isinstance(msg, AIMessage) and msg.response_metadata.get(EVALUATION_METADATA_KEY):
+            lines.append(f"Avaliador: {msg.content}")
+        elif isinstance(msg, AIMessage):
+            lines.append(f"Paciente: {msg.content}")
+    return "\n".join(lines)
 
 def get_session_messages(state: AgentState, session_number: int) -> List[BaseMessage]:
     session_end_indices = state.get("session_end_indices", {})
@@ -865,7 +875,9 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
             channel_values = saved_state["channel_values"]
             messages = channel_values.get("messages", [])
             current_session = channel_values.get("current_session", 1)
-            session_end_indices = channel_values.get("session_end_indices", {})
+            # Normalizar chaves para int (JSON serializa dict keys como strings)
+            raw_indices = channel_values.get("session_end_indices", {})
+            session_end_indices = {int(k): v for k, v in raw_indices.items()}
 
         # Fallback: se o checkpointer não tem mensagens, tentar reconstruir do conversation_log
         if not messages:
@@ -1151,6 +1163,9 @@ with st.sidebar:
 # --- 13. RENDERIZAÇÃO DO CHAT ---
 
 session_end_indices = st.session_state.get("session_end_indices", {})
+
+# Normalizar chaves para int (proteção contra dados carregados de checkpoint com chaves string)
+session_end_indices = {int(k): v for k, v in session_end_indices.items()}
 
 # Dicionário reverso O(1) para lookup: índice -> número da sessão (evita loop O(n×7))
 index_to_session = {(idx - 1): session_num for session_num, idx in session_end_indices.items()}
