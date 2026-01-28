@@ -763,6 +763,58 @@ def load_session_metadata(thread_id: str) -> Optional[str]:
 
     return None
 
+def load_messages_from_conversation_log(thread_id: str) -> tuple:
+    """Fallback: reconstrói mensagens a partir da tabela conversation_log
+    quando o checkpointer não tem dados (ex: conexão estava morta durante uso)."""
+    query = """
+        SELECT message_type, message_content, session_number, metadata
+        FROM conversation_log
+        WHERE thread_id = %s
+        ORDER BY message_order ASC
+    """
+    try:
+        rows = execute_db_query(query, (thread_id,), fetch=True)
+        if not rows:
+            return [], 1, {}
+
+        messages = []
+        max_session = 1
+        session_end_indices = {}
+
+        for row in rows:
+            msg_type = row['message_type']
+            content = row['message_content']
+            session_num = row['session_number']
+
+            if session_num > max_session:
+                max_session = session_num
+
+            if msg_type == 'therapist':
+                messages.append(HumanMessage(content=content))
+            elif msg_type == 'patient':
+                messages.append(AIMessage(content=content))
+            elif msg_type == 'evaluation':
+                messages.append(AIMessage(
+                    content=content,
+                    response_metadata={EVALUATION_METADATA_KEY: True}
+                ))
+                session_end_indices[session_num] = len(messages)
+
+        # Determinar sessão atual: se a última avaliação foi feita, avançar
+        current_session = max_session
+        if max_session in session_end_indices:
+            current_session = max_session + 1
+
+        logger.info(
+            f"✅ Fallback conversation_log: {len(messages)} mensagens reconstruídas, "
+            f"sessão atual={current_session}"
+        )
+        return messages, current_session, session_end_indices
+
+    except Exception as e:
+        logger.error(f"Erro ao carregar mensagens do conversation_log: {e}")
+        return [], 1, {}
+
 def load_session_from_checkpoint(thread_id: str) -> bool:
     try:
         logger.info(f"Carregando sessão: {thread_id}")
@@ -775,10 +827,8 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
         persona_data = PERSONAS_BY_NAME.get(persona_name)
         if not persona_data:
             return False
-        
+
         config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-        
-         # Garantir que a conexão do checkpointer está viva antes de consultar
         import time
         max_retries = 2
         saved_state = None
@@ -806,24 +856,29 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
                     _checkpointer_conn = None
                 else:
                     raise
-        
+
         messages = []
         current_session = 1
         session_end_indices = {}
-        
+
         if saved_state and saved_state.get("channel_values"):
             channel_values = saved_state["channel_values"]
             messages = channel_values.get("messages", [])
             current_session = channel_values.get("current_session", 1)
             session_end_indices = channel_values.get("session_end_indices", {})
-        
+
+        # Fallback: se o checkpointer não tem mensagens, tentar reconstruir do conversation_log
+        if not messages:
+            logger.warning(f"⚠️ Checkpointer vazio para {thread_id}. Tentando fallback do conversation_log...")
+            messages, current_session, session_end_indices = load_messages_from_conversation_log(thread_id)
+
         st.session_state.messages = messages
         st.session_state.current_session_num = current_session
         st.session_state.session_end_indices = session_end_indices
         st.session_state.thread_id = thread_id
         st.session_state.current_patient = persona_data
-        
-        logger.info(f"Sessão restaurada: {persona_name}, sessão {current_session}")
+
+        logger.info(f"Sessão restaurada: {persona_name}, sessão {current_session}, mensagens={len(messages)}")
         if messages:
             st.toast(f"Sessão restaurada com {persona_name}!")
         return True
