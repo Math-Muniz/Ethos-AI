@@ -873,7 +873,9 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
 
         if saved_state and saved_state.get("channel_values"):
             channel_values = saved_state["channel_values"]
-            messages = channel_values.get("messages", [])
+            raw_messages = channel_values.get("messages", [])
+            # Filtrar END_SESSION_CODE do checkpoint (código interno de controle, não tem valor para o usuário)
+            messages = [msg for msg in raw_messages if not (isinstance(msg, HumanMessage) and END_SESSION_CODE in msg.content)]
             current_session = channel_values.get("current_session", 1)
             # Normalizar chaves para int (JSON serializa dict keys como strings)
             raw_indices = channel_values.get("session_end_indices", {})
