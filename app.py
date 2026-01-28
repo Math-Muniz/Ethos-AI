@@ -1097,25 +1097,29 @@ with st.sidebar:
         if st.button("🏁 Encerrar Sessão e Avaliar", type="primary", use_container_width=True):
             with st.spinner("⏳ Gerando avaliação detalhada..."):
                 try:
+                    end_message = HumanMessage(content=END_SESSION_CODE)
+                    st.session_state.messages.append(end_message)
+                    
                     response = safe_invoke(
-                        app,
-                        {
-                            "messages": st.session_state.messages + [HumanMessage(content=END_SESSION_CODE)],
-                            "current_session": st.session_state.current_session_num,
-                            "session_end_indices": st.session_state.get("session_end_indices", {}),
-                            "patient_prompt": st.session_state.current_patient['prompt'],
-                            "persona_name": st.session_state.current_patient['name']
-                        },
-                        {
-                            "configurable": {"thread_id": st.session_state.thread_id},
-                            "metadata": {
-                                "user_id": st.session_state.user_id,
-                                "persona": st.session_state.current_patient['name'],
-                                "session_num": st.session_state.current_session_num,
-                                "action": "evaluate_session"
-                            }
+                    app,
+                    {
+                        "messages": st.session_state.messages, 
+                        "current_session": st.session_state.current_session_num,
+                        "session_end_indices": st.session_state.get("session_end_indices", {}),
+                        "patient_prompt": st.session_state.current_patient['prompt'],
+                        "persona_name": st.session_state.current_patient['name']
+                    },
+                    {
+                        "configurable": {"thread_id": st.session_state.thread_id},
+                        "metadata": {
+                            "user_id": st.session_state.user_id,
+                            "persona": st.session_state.current_patient['name'],
+                            "session_num": st.session_state.current_session_num,
+                            "action": "evaluate_session"
                         }
-                    )
+                    }
+                )
+                   
 
                     evaluation_message = response["messages"][-1]
                     st.session_state.messages.append(evaluation_message)
@@ -1256,4 +1260,5 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
