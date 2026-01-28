@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages.utils import trim_messages
 from langgraph.graph import StateGraph, add_messages, END, START
 from langgraph.checkpoint.postgres import PostgresSaver
 import psycopg
@@ -69,6 +70,7 @@ if st.query_params.get("health") == "check":
 
 # --- CONSTANTES E VALIDAÇÕES INICIAIS ---
 NUM_SESSIONS = 7  # Número total de sessões terapêuticas
+MAX_CONTEXT_TOKENS = 115_200  # ~90% de 128K — margem de segurança para o modelo
 END_SESSION_CODE = "H7Y4K9P2R1T6X3Z0V8B5N7M3G"
 EVALUATION_METADATA_KEY = "is_evaluation"
 BRAZIL_TZ = timezone(timedelta(hours=-3))
@@ -413,16 +415,50 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     
     def patient_node(state: AgentState) -> Dict:
         system_prompt = SystemMessage(content=state["patient_prompt"])
-        response = _patient_llm.invoke([system_prompt] + filter_messages(state["messages"]))
+        filtered = filter_messages(state["messages"])
+        messages_to_send = [system_prompt] + filtered
+        token_count = _patient_llm.get_num_tokens_from_messages(messages_to_send)
+        if token_count > MAX_CONTEXT_TOKENS:
+            logger.warning(
+                f"⚠️ patient_node: {token_count} tokens excede limite de {MAX_CONTEXT_TOKENS}. Trimando contexto..."
+            )
+            messages_to_send = trim_messages(
+                messages_to_send,
+                max_tokens=MAX_CONTEXT_TOKENS,
+                strategy="last",
+                token_counter=_patient_llm,
+                include_system=True,
+                start_on="human",
+            )
+        response = _patient_llm.invoke(messages_to_send)
         return {"messages": [response]}
     
     def create_evaluation_node(session_number: int):
         def evaluation_node(state: AgentState) -> Dict:
             session_messages = get_session_messages(state, session_number)
-            transcript = create_transcript(filter_messages(session_messages))
-            
+            filtered_session = filter_messages(session_messages)
             evaluation_prompt = EVALUATION_PROMPTS[session_number]
-            response = _evaluator_llm.invoke(evaluation_prompt.format(transcript=transcript))
+            prompt_with_transcript = evaluation_prompt.format(
+                transcript=create_transcript(filtered_session)
+            )
+            prompt_messages = [HumanMessage(content=prompt_with_transcript)]
+            token_count = _evaluator_llm.get_num_tokens_from_messages(prompt_messages)
+            if token_count > MAX_CONTEXT_TOKENS:
+                logger.warning(
+                    f"⚠️ evaluation_node (sessão {session_number}): "
+                    f"{token_count} tokens excede limite de {MAX_CONTEXT_TOKENS}. Trimando transcript..."
+                )
+                trimmed_session = trim_messages(
+                    filtered_session,
+                    max_tokens=MAX_CONTEXT_TOKENS,
+                    strategy="last",
+                    token_counter=_evaluator_llm,
+                    start_on="human",
+                )
+                prompt_with_transcript = evaluation_prompt.format(
+                    transcript=create_transcript(trimmed_session)
+                )
+            response = _evaluator_llm.invoke(prompt_with_transcript)
             
             session_end_indices = state.get("session_end_indices", {}).copy()
             session_end_indices[session_number] = len(state["messages"]) + 1
