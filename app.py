@@ -70,7 +70,7 @@ if st.query_params.get("health") == "check":
 
 # --- CONSTANTES E VALIDAÇÕES INICIAIS ---
 NUM_SESSIONS = 7  # Número total de sessões terapêuticas
-MAX_CONTEXT_TOKENS = 115_000  # ~90% de 128K — margem de segurança para o modelo
+MAX_CONTEXT_TOKENS = 115_200  # ~90% de 128K — margem de segurança para o modelo
 END_SESSION_CODE = "H7Y4K9P2R1T6X3Z0V8B5N7M3G"
 EVALUATION_METADATA_KEY = "is_evaluation"
 BRAZIL_TZ = timezone(timedelta(hours=-3))
@@ -416,17 +416,21 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     def patient_node(state: AgentState) -> Dict:
         system_prompt = SystemMessage(content=state["patient_prompt"])
         filtered = filter_messages(state["messages"])
-        trimmed = trim_messages(
-            [system_prompt] + filtered,
-            max_tokens=MAX_CONTEXT_TOKENS,
-            strategy="last",
-            token_counter=_patient_llm,
-            include_system=True,
-            start_on="human",
-        )
-        if len(trimmed) < len(filtered) + 1:
-            logger.warning(f"⚠️ patient_node: contexto trimado de {len(filtered)+1} para {len(trimmed)} mensagens")
-        response = _patient_llm.invoke(trimmed)
+        messages_to_send = [system_prompt] + filtered
+        token_count = _patient_llm.get_num_tokens_from_messages(messages_to_send)
+        if token_count > MAX_CONTEXT_TOKENS:
+            logger.warning(
+                f"⚠️ patient_node: {token_count} tokens excede limite de {MAX_CONTEXT_TOKENS}. Trimando contexto..."
+            )
+            messages_to_send = trim_messages(
+                messages_to_send,
+                max_tokens=MAX_CONTEXT_TOKENS,
+                strategy="last",
+                token_counter=_patient_llm,
+                include_system=True,
+                start_on="human",
+            )
+        response = _patient_llm.invoke(messages_to_send)
         return {"messages": [response]}
     
     def create_evaluation_node(session_number: int):
