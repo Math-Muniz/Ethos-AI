@@ -829,8 +829,6 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
             return False
 
         config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-
-        # Garantir que a conexão do checkpointer está viva antes de consultar
         import time
         max_retries = 2
         saved_state = None
@@ -1243,3 +1241,4 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
             except Exception as e:
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
