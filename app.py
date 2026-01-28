@@ -200,6 +200,7 @@ def get_db_pool() -> ConnectionPool:
             conninfo=_get_connection_string(),
             min_size=2,
             max_size=10,
+            check=ConnectionPool.check_connection,
             kwargs={
                 "keepalives": 1,
                 "keepalives_idle": 30,
@@ -207,8 +208,19 @@ def get_db_pool() -> ConnectionPool:
                 "keepalives_count": 5
             }
         )
-        logger.info("✅ Connection pool criado (min=2, max=10)")
+        logger.info("✅ Connection pool criado (min=2, max=10, check=enabled)")
     return _db_pool
+
+def _reset_db_pool():
+    """Fecha e reseta o pool de conexões para forçar reconexão."""
+    global _db_pool
+    if _db_pool is not None:
+        try:
+            _db_pool.close()
+        except Exception:
+            pass
+        _db_pool = None
+        logger.info("🔄 Connection pool resetado")
 
 def create_supabase_connection():
     """Cria conexão direta (para checkpointer e operações que precisam de conexão dedicada)."""
@@ -252,6 +264,15 @@ def execute_db_query(query: str, params: tuple = None, fetch: bool = False):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
                 retry_delay *= 2
+                # Se erro de conexão, resetar o pool para forçar novas conexões
+                error_msg = str(e).lower()
+                if any(term in error_msg for term in [
+                    "connection is closed", "connection was closed",
+                    "broken pipe", "connection reset", "server closed",
+                ]):
+                    logger.warning("🔄 Erro de conexão detectado, resetando pool...")
+                    _reset_db_pool()
+                    pool = get_db_pool()
             else:
                 logger.error(f"Erro após {max_retries} tentativas: {e}")
                 raise
@@ -401,17 +422,52 @@ def get_llms():
         st.error(f"❌ Erro ao inicializar modelos: {e}")
         st.stop()
 
+# Gerenciamento global da conexão do checkpointer com reconexão automática
+_checkpointer_conn = None
+_checkpointer: Optional[PostgresSaver] = None
+
+def ensure_checkpointer_connection() -> PostgresSaver:
+    """Garante que a conexão do checkpointer está viva, reconectando se necessário."""
+    global _checkpointer_conn, _checkpointer
+
+    needs_reconnect = False
+
+    if _checkpointer_conn is None or _checkpointer_conn.closed:
+        needs_reconnect = True
+    else:
+        try:
+            _checkpointer_conn.execute("SELECT 1")
+        except Exception:
+            needs_reconnect = True
+
+    if needs_reconnect:
+        logger.warning("🔄 Reconectando checkpointer ao banco de dados...")
+        try:
+            if _checkpointer_conn and not _checkpointer_conn.closed:
+                _checkpointer_conn.close()
+        except Exception:
+            pass
+
+        _checkpointer_conn = create_supabase_connection()
+
+        if _checkpointer is None:
+            _checkpointer = PostgresSaver(conn=_checkpointer_conn)
+            _checkpointer_conn.autocommit = True
+            _checkpointer.setup()
+            _checkpointer_conn.autocommit = False
+        else:
+            _checkpointer.conn = _checkpointer_conn
+
+        logger.info("✅ Checkpointer reconectado com sucesso")
+
+    return _checkpointer
+
 @st.cache_resource
 def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     logger.info("Compilando grafo LangGraph...")
-    
-    # Conexão dedicada para checkpointer
-    conn = create_supabase_connection()
-    checkpointer = PostgresSaver(conn=conn)
-    
-    conn.autocommit = True
-    checkpointer.setup()
-    conn.autocommit = False
+
+    # Conexão dedicada para checkpointer com reconexão automática
+    checkpointer = ensure_checkpointer_connection()
     
     def patient_node(state: AgentState) -> Dict:
         system_prompt = SystemMessage(content=state["patient_prompt"])
@@ -499,6 +555,37 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     app = workflow.compile(checkpointer=checkpointer)
     logger.info(f"✅ Aplicação LangGraph compilada com {NUM_SESSIONS} sessões")
     return app, checkpointer
+
+def safe_invoke(app, invoke_args, invoke_config, max_retries=2):
+    """Executa app.invoke() com retry e reconexão automática do checkpointer."""
+    import time
+    for attempt in range(max_retries):
+        try:
+            ensure_checkpointer_connection()
+            return app.invoke(invoke_args, invoke_config)
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_connection_error = any(term in error_msg for term in [
+                "connection is closed", "connection was closed",
+                "server closed the connection", "broken pipe",
+                "connection reset", "connection refused",
+                "connection timed out", "operationalerror",
+            ])
+            if is_connection_error and attempt < max_retries - 1:
+                logger.warning(
+                    f"🔄 Erro de conexão no invoke (tentativa {attempt + 1}/{max_retries}): {e}. Reconectando..."
+                )
+                time.sleep(2 ** attempt)
+                # Forçar reconexão na próxima iteração
+                global _checkpointer_conn
+                try:
+                    if _checkpointer_conn and not _checkpointer_conn.closed:
+                        _checkpointer_conn.close()
+                except Exception:
+                    pass
+                _checkpointer_conn = None
+            else:
+                raise
 
 # --- 7. FUNÇÕES DE MÉTRICAS ---
 
@@ -915,14 +1002,15 @@ with st.sidebar:
         if st.button("🏁 Encerrar Sessão e Avaliar", type="primary", use_container_width=True):
             with st.spinner("⏳ Gerando avaliação detalhada..."):
                 try:
-                    response = app.invoke(
+                    response = safe_invoke(
+                        app,
                         {
-                            "messages": st.session_state.messages + [HumanMessage(content=END_SESSION_CODE)], 
-                            "current_session": st.session_state.current_session_num, 
+                            "messages": st.session_state.messages + [HumanMessage(content=END_SESSION_CODE)],
+                            "current_session": st.session_state.current_session_num,
                             "session_end_indices": st.session_state.get("session_end_indices", {}),
                             "patient_prompt": st.session_state.current_patient['prompt'],
                             "persona_name": st.session_state.current_patient['name']
-                        }, 
+                        },
                         {
                             "configurable": {"thread_id": st.session_state.thread_id},
                             "metadata": {
@@ -1029,10 +1117,11 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
     with st.chat_message("assistant", avatar="🧑‍⚕️"):
         with st.spinner("💭 Paciente Digitando..."):
             try:
-                response = app.invoke(
+                response = safe_invoke(
+                    app,
                     {
-                        "messages": st.session_state.messages, 
-                        "current_session": st.session_state.current_session_num, 
+                        "messages": st.session_state.messages,
+                        "current_session": st.session_state.current_session_num,
                         "session_end_indices": st.session_state.get("session_end_indices", {}),
                         "patient_prompt": st.session_state.current_patient['prompt'],
                         "persona_name": st.session_state.current_patient['name']
