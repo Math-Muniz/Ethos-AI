@@ -775,10 +775,38 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
         persona_data = PERSONAS_BY_NAME.get(persona_name)
         if not persona_data:
             return False
-        
+
         config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
-        saved_state = checkpointer.get(config)
-        
+
+        # Garantir que a conexão do checkpointer está viva antes de consultar
+        import time
+        max_retries = 2
+        saved_state = None
+        for attempt in range(max_retries):
+            try:
+                ensure_checkpointer_connection()
+                saved_state = checkpointer.get(config)
+                break
+            except Exception as e:
+                error_msg = str(e).lower()
+                is_connection_error = any(term in error_msg for term in [
+                    "connection is closed", "connection was closed",
+                    "broken pipe", "connection reset", "server closed",
+                ])
+                if is_connection_error and attempt < max_retries - 1:
+                    logger.warning(f"🔄 Conexão perdida ao carregar checkpoint (tentativa {attempt + 1}): {e}")
+                    time.sleep(1)
+                    # Forçar reconexão
+                    global _checkpointer_conn
+                    try:
+                        if _checkpointer_conn and not _checkpointer_conn.closed:
+                            _checkpointer_conn.close()
+                    except Exception:
+                        pass
+                    _checkpointer_conn = None
+                else:
+                    raise
+
         messages = []
         current_session = 1
         session_end_indices = {}
