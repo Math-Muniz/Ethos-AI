@@ -433,40 +433,44 @@ def get_llms():
         st.stop()
 
 # Gerenciamento global da conexão do checkpointer com reconexão automática
+import threading
 _checkpointer_conn = None
 _checkpointer: Optional[PostgresSaver] = None
+_checkpointer_lock = threading.Lock()
 
 def ensure_checkpointer_connection() -> PostgresSaver:
-    """Garante que a conexão do checkpointer está viva, reconectando se necessário."""
+    """Garante que a conexão do checkpointer está viva, reconectando se necessário.
+    Thread-safe: usa _checkpointer_lock para evitar race conditions entre sessões."""
     global _checkpointer_conn, _checkpointer
 
-    needs_reconnect = False
+    with _checkpointer_lock:
+        needs_reconnect = False
 
-    if _checkpointer_conn is None or _checkpointer_conn.closed:
-        needs_reconnect = True
-    else:
-        try:
-            _checkpointer_conn.execute("SELECT 1")
-        except Exception:
+        if _checkpointer_conn is None or _checkpointer_conn.closed:
             needs_reconnect = True
-
-    if needs_reconnect:
-        logger.warning("🔄 Reconectando checkpointer ao banco de dados...")
-        try:
-            if _checkpointer_conn and not _checkpointer_conn.closed:
-                _checkpointer_conn.close()
-        except Exception:
-            pass
-
-        _checkpointer_conn = create_supabase_connection()
-
-        if _checkpointer is None:
-            _checkpointer = PostgresSaver(conn=_checkpointer_conn)
-            _checkpointer_conn.autocommit = True
-            _checkpointer.setup()
-            _checkpointer_conn.autocommit = False
         else:
-            _checkpointer.conn = _checkpointer_conn
+            try:
+                _checkpointer_conn.execute("SELECT 1")
+            except Exception:
+                needs_reconnect = True
+
+        if needs_reconnect:
+            logger.warning("🔄 Reconectando checkpointer ao banco de dados...")
+            try:
+                if _checkpointer_conn and not _checkpointer_conn.closed:
+                    _checkpointer_conn.close()
+            except Exception:
+                pass
+
+            _checkpointer_conn = create_supabase_connection()
+
+            if _checkpointer is None:
+                _checkpointer = PostgresSaver(conn=_checkpointer_conn)
+                _checkpointer_conn.autocommit = True
+                _checkpointer.setup()
+                _checkpointer_conn.autocommit = False
+            else:
+                _checkpointer.conn = _checkpointer_conn
 
         logger.info("✅ Checkpointer reconectado com sucesso")
 
@@ -586,14 +590,15 @@ def safe_invoke(app, invoke_args, invoke_config, max_retries=2):
                     f"🔄 Erro de conexão no invoke (tentativa {attempt + 1}/{max_retries}): {e}. Reconectando..."
                 )
                 time.sleep(2 ** attempt)
-                # Forçar reconexão na próxima iteração
-                global _checkpointer_conn
-                try:
-                    if _checkpointer_conn and not _checkpointer_conn.closed:
-                        _checkpointer_conn.close()
-                except Exception:
-                    pass
-                _checkpointer_conn = None
+                # Forçar reconexão na próxima iteração (thread-safe via lock)
+                with _checkpointer_lock:
+                    global _checkpointer_conn
+                    try:
+                        if _checkpointer_conn and not _checkpointer_conn.closed:
+                            _checkpointer_conn.close()
+                    except Exception:
+                        pass
+                    _checkpointer_conn = None
             else:
                 raise
 
@@ -856,14 +861,15 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
                 if is_connection_error and attempt < max_retries - 1:
                     logger.warning(f"🔄 Conexão perdida ao carregar checkpoint (tentativa {attempt + 1}): {e}")
                     time.sleep(1)
-                    # Forçar reconexão
-                    global _checkpointer_conn
-                    try:
-                        if _checkpointer_conn and not _checkpointer_conn.closed:
-                            _checkpointer_conn.close()
-                    except Exception:
-                        pass
-                    _checkpointer_conn = None
+                    # Forçar reconexão (thread-safe via lock)
+                    with _checkpointer_lock:
+                        global _checkpointer_conn
+                        try:
+                            if _checkpointer_conn and not _checkpointer_conn.closed:
+                                _checkpointer_conn.close()
+                        except Exception:
+                            pass
+                        _checkpointer_conn = None
                 else:
                     raise
 
@@ -1157,10 +1163,17 @@ with st.sidebar:
                     
                     st.rerun()
                 except TimeoutError:
+                    # Remover end_message para evitar duplicação em retry
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     st.error("⏱️ Tempo limite excedido ao gerar avaliação. Tente novamente.")
                 except ConnectionError:
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     st.error("🔌 Erro de conexão. Verifique sua internet.")
                 except Exception as e:
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     logger.error(f"Erro durante avaliação: {e}")
                     st.error(f"❌ Erro ao processar avaliação: {str(e)}")
 
