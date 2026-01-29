@@ -1157,10 +1157,17 @@ with st.sidebar:
                     
                     st.rerun()
                 except TimeoutError:
+                    # Remover end_message para evitar duplicação em retry
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     st.error("⏱️ Tempo limite excedido ao gerar avaliação. Tente novamente.")
                 except ConnectionError:
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     st.error("🔌 Erro de conexão. Verifique sua internet.")
                 except Exception as e:
+                    if st.session_state.messages and st.session_state.messages[-1].content == END_SESSION_CODE:
+                        st.session_state.messages.pop()
                     logger.error(f"Erro durante avaliação: {e}")
                     st.error(f"❌ Erro ao processar avaliação: {str(e)}")
 
