@@ -225,6 +225,8 @@ def get_next_persona(current_persona_name: str) -> Dict:
 
     return next_persona if next_persona else PERSONAS_DATA[0]
 
+import threading
+
 # --- 5. CONEXÃO SUPABASE (IPv4 Pooler) COM CONNECTION POOLING ---
 
 def _get_connection_string() -> str:
@@ -240,36 +242,41 @@ def _get_connection_string() -> str:
 
 # Pool de conexões global - reutiliza conexões em vez de criar novas
 _db_pool: Optional[ConnectionPool] = None
+_db_pool_lock = threading.Lock()
 
 def get_db_pool() -> ConnectionPool:
-    """Retorna o pool de conexões, criando-o se necessário."""
+    """Retorna o pool de conexões, criando-o se necessário. Thread-safe."""
     global _db_pool
     if _db_pool is None:
-        _db_pool = ConnectionPool(
-            conninfo=_get_connection_string(),
-            min_size=2,
-            max_size=10,
-            check=ConnectionPool.check_connection,
-            kwargs={
-                "keepalives": 1,
-                "keepalives_idle": 30,
-                "keepalives_interval": 10,
-                "keepalives_count": 5
-            }
-        )
-        logger.info("✅ Connection pool criado (min=2, max=10, check=enabled)")
+        with _db_pool_lock:
+            if _db_pool is None:  # Double-check locking
+                _db_pool = ConnectionPool(
+                    conninfo=_get_connection_string(),
+                    min_size=2,
+                    max_size=10,
+                    max_idle=300,  # Fechar conexões idle após 5min (evita stale no PgBouncer)
+                    check=ConnectionPool.check_connection,
+                    kwargs={
+                        "keepalives": 1,
+                        "keepalives_idle": 30,
+                        "keepalives_interval": 10,
+                        "keepalives_count": 5
+                    }
+                )
+                logger.info("✅ Connection pool criado (min=2, max=10, check=enabled)")
     return _db_pool
 
 def _reset_db_pool():
-    """Fecha e reseta o pool de conexões para forçar reconexão."""
+    """Fecha e reseta o pool de conexões para forçar reconexão. Thread-safe."""
     global _db_pool
-    if _db_pool is not None:
-        try:
-            _db_pool.close()
-        except Exception:
-            pass
-        _db_pool = None
-        logger.info("🔄 Connection pool resetado")
+    with _db_pool_lock:
+        if _db_pool is not None:
+            try:
+                _db_pool.close()
+            except Exception:
+                pass
+            _db_pool = None
+            logger.info("🔄 Connection pool resetado")
 
 def create_supabase_connection():
     """Cria conexão direta (para checkpointer e operações que precisam de conexão dedicada)."""
@@ -472,15 +479,18 @@ def get_llms():
         st.stop()
 
 # Gerenciamento global da conexão do checkpointer com reconexão automática
-import threading
 _checkpointer_conn = None
 _checkpointer: Optional[PostgresSaver] = None
 _checkpointer_lock = threading.Lock()
+_setup_done = False  # Indica se setup() já foi executado (tabelas já existem)
+_compiled_app = None  # Referência ao app compilado para atualizar checkpointer
 
 def ensure_checkpointer_connection() -> PostgresSaver:
     """Garante que a conexão do checkpointer está viva, reconectando se necessário.
-    Thread-safe: usa _checkpointer_lock para evitar race conditions entre sessões."""
-    global _checkpointer_conn, _checkpointer
+    Thread-safe: usa _checkpointer_lock para evitar race conditions entre sessões.
+    IMPORTANTE: Sempre cria um novo PostgresSaver na reconexão, pois reatribuir .conn
+    não funciona - o PostgresSaver mantém referências internas à conexão original."""
+    global _checkpointer_conn, _checkpointer, _setup_done, _compiled_app
 
     with _checkpointer_lock:
         needs_reconnect = False
@@ -489,7 +499,11 @@ def ensure_checkpointer_connection() -> PostgresSaver:
             needs_reconnect = True
         else:
             try:
+                # Health check: usar autocommit temporário para evitar abrir transação idle
+                old_autocommit = _checkpointer_conn.autocommit
+                _checkpointer_conn.autocommit = True
                 _checkpointer_conn.execute("SELECT 1")
+                _checkpointer_conn.autocommit = old_autocommit
             except Exception:
                 needs_reconnect = True
 
@@ -503,15 +517,22 @@ def ensure_checkpointer_connection() -> PostgresSaver:
 
             _checkpointer_conn = create_supabase_connection()
 
-            if _checkpointer is None:
-                _checkpointer = PostgresSaver(conn=_checkpointer_conn)
+            # SEMPRE criar novo PostgresSaver (reatribuir .conn não funciona)
+            _checkpointer = PostgresSaver(conn=_checkpointer_conn)
+
+            if not _setup_done:
                 _checkpointer_conn.autocommit = True
                 _checkpointer.setup()
                 _checkpointer_conn.autocommit = False
+                _setup_done = True
             else:
-                _checkpointer.conn = _checkpointer_conn
+                _checkpointer_conn.autocommit = False
 
-        logger.info("✅ Checkpointer reconectado com sucesso")
+            # Atualizar referência no app compilado (LangGraph usa app.checkpointer)
+            if _compiled_app is not None:
+                _compiled_app.checkpointer = _checkpointer
+
+            logger.info("✅ Checkpointer reconectado com sucesso")
 
     return _checkpointer
 
@@ -711,6 +732,7 @@ if not validate_db_connection():
 
 patient_llm, evaluator_llm = get_llms()
 app, checkpointer = get_app_and_checkpointer(patient_llm, evaluator_llm)
+_compiled_app = app  # Permite que ensure_checkpointer_connection() atualize app.checkpointer
 
 # --- 9. GERENCIAMENTO DE USER_ID ---
 
@@ -886,12 +908,14 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
 
         config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
         import time
-        max_retries = 2
+        max_retries = 3
         saved_state = None
         for attempt in range(max_retries):
             try:
-                ensure_checkpointer_connection()
-                saved_state = checkpointer.get(config)
+                # IMPORTANTE: usar o checkpointer RETORNADO, não a variável do módulo
+                # (após reconexão, um novo PostgresSaver é criado e a variável antiga fica stale)
+                cp = ensure_checkpointer_connection()
+                saved_state = cp.get(config)
                 break
             except Exception as e:
                 error_msg = str(e).lower()
@@ -901,8 +925,8 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
                 ])
                 if is_connection_error and attempt < max_retries - 1:
                     logger.warning(f"🔄 Conexão perdida ao carregar checkpoint (tentativa {attempt + 1}): {e}")
-                    time.sleep(1)
-                    # Forçar reconexão (thread-safe via lock)
+                    time.sleep(2 ** attempt)
+                    # Forçar reconexão na próxima iteração
                     with _checkpointer_lock:
                         global _checkpointer_conn
                         try:
@@ -1311,10 +1335,17 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
 
                 st.rerun()
             except TimeoutError:
+                # Remover HumanMessage para evitar loop infinito de retry no próximo rerun
+                if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage):
+                    st.session_state.messages.pop()
                 st.error("⏱️ Tempo limite excedido. Tente novamente.")
             except ConnectionError:
+                if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage):
+                    st.session_state.messages.pop()
                 st.error("🔌 Erro de conexão. Verifique sua internet.")
             except Exception as e:
+                if st.session_state.messages and isinstance(st.session_state.messages[-1], HumanMessage):
+                    st.session_state.messages.pop()
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
 
