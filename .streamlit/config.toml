@@ -4,10 +4,8 @@ port = 8501
 headless = true
 enableCORS = false
 enableXsrfProtection = true
-# WebSocket keepalive para evitar "Connection lost" em proxies/Render
+# WebSocket compression para reduzir tráfego e manter conexão estável no Render
 enableWebsocketCompression = true
-# Aumentar tolerância para operações longas (avaliações GPT-4o)
-maxMessageSize = 200
 
 [browser]
 gatherUsageStats = false
