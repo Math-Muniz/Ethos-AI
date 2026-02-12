@@ -76,6 +76,45 @@ EVALUATION_METADATA_KEY = "is_evaluation"
 BRAZIL_TZ = timezone(timedelta(hours=-3))
 CLOCK_HTML = """<style> .digital-clock { background-color: #e1e5eb; border: 2px solid #c9ced4; border-radius: 5px; padding: 8px; font-family: sans-serif; color: #0d1a33; font-size: 1.75rem; font-weight: bold; text-align: center; letter-spacing: 2px; } </style><script> function updateClock() { var now = new Date(); var h = now.getHours().toString().padStart(2, '0'); var m = now.getMinutes().toString().padStart(2, '0'); var s = now.getSeconds().toString().padStart(2, '0'); document.getElementById('clock').innerText = h + ':' + m + ':' + s; } setInterval(updateClock, 1000); setTimeout(updateClock, 1); </script><div id="clock" class="digital-clock"></div>"""
 
+# Script JS para manter a conexão WebSocket viva e auto-reconectar no Render
+KEEPALIVE_JS = """
+<script>
+(function() {
+    // Ping periódico para manter a conexão WebSocket viva no proxy do Render
+    setInterval(function() {
+        var ws = window.parent?.streamlitWs || null;
+        if (!ws) {
+            // Fallback: buscar WebSocket ativo no window
+            var frames = window.parent.document.querySelectorAll('iframe');
+            // Um fetch leve mantém o serviço acordado no Render free tier
+            fetch(window.location.origin + '/?health=check', {method: 'HEAD'}).catch(function(){});
+        }
+    }, 25000);  // A cada 25s (Render fecha idle em ~60s)
+
+    // Auto-reload quando Streamlit perde conexão por mais de 10s
+    var disconnectTimer = null;
+    var observer = new MutationObserver(function() {
+        var banner = window.parent.document.querySelector('[data-testid="stStatusWidget"]');
+        if (banner && banner.textContent.includes('onnection')) {
+            if (!disconnectTimer) {
+                disconnectTimer = setTimeout(function() {
+                    window.parent.location.reload();
+                }, 10000);  // Recarrega após 10s desconectado
+            }
+        } else {
+            if (disconnectTimer) {
+                clearTimeout(disconnectTimer);
+                disconnectTimer = null;
+            }
+        }
+    });
+    setTimeout(function() {
+        observer.observe(window.parent.document.body, {childList: true, subtree: true});
+    }, 3000);
+})();
+</script>
+"""
+
 # --- WHITELIST DE USUÁRIOS AUTORIZADOS ---
 ALLOWED_USER_IDS_RAW = os.getenv("ALLOWED_USER_IDS", "")
 ALLOWED_USER_IDS = set(uid.strip() for uid in ALLOWED_USER_IDS_RAW.split(",") if uid.strip())
@@ -423,7 +462,7 @@ def get_llms():
             openai_api_key=api_key,
             temperature=0,
             max_retries=3,
-            timeout=90
+            timeout=180
         )
         
         logger.info("✅ LLMs inicializados com sucesso")
@@ -570,7 +609,7 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     logger.info(f"✅ Aplicação LangGraph compilada com {NUM_SESSIONS} sessões")
     return app, checkpointer
 
-def safe_invoke(app, invoke_args, invoke_config, max_retries=2):
+def safe_invoke(app, invoke_args, invoke_config, max_retries=3):
     """Executa app.invoke() com retry e reconexão automática do checkpointer."""
     import time
     for attempt in range(max_retries):
@@ -599,6 +638,8 @@ def safe_invoke(app, invoke_args, invoke_config, max_retries=2):
                     except Exception:
                         pass
                     _checkpointer_conn = None
+                # Resetar também o pool de conexões para queries diretas
+                _reset_db_pool()
             else:
                 raise
 
@@ -995,6 +1036,9 @@ else:
 st.markdown("<h1 style='text-align: center;'>ETHOS AI</h1>", unsafe_allow_html=True)
 
 # --- 12. INTERFACE ---
+
+# Keepalive: mantém conexão WebSocket viva durante operações longas (avaliações GPT-4o)
+components.html(KEEPALIVE_JS, height=0)
 
 with st.sidebar:
     st.title("Painel de Controle")
