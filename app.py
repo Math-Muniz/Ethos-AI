@@ -461,7 +461,7 @@ def get_llms():
             openai_api_key=api_key,
             temperature=0,
             max_retries=3,
-            timeout=30
+            timeout=300
         )
         
         evaluator_llm = ChatOpenAI(
@@ -469,7 +469,7 @@ def get_llms():
             openai_api_key=api_key,
             temperature=0,
             max_retries=3,
-            timeout=180
+            timeout=300
         )
         
         logger.info("✅ LLMs inicializados com sucesso")
@@ -1348,5 +1348,6 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                     st.session_state.messages.pop()
                 logger.error(f"Erro ao gerar resposta: {e}")
                 st.error(f"❌ Erro ao gerar resposta: {str(e)}")
+
 
 
