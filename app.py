@@ -714,6 +714,12 @@ def log_conversation_message(
          message_content, message_order, metadata)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
+    msg_params = {
+        "thread_id": thread_id, "user_id": user_id,
+        "persona_name": persona_name, "session_number": session_number,
+        "message_type": message_type, "message_content": message_content,
+        "message_order": message_order, "metadata": metadata
+    }
     try:
         metadata_json = _serialize_json(metadata)
         execute_db_query(query, (
@@ -722,7 +728,140 @@ def log_conversation_message(
         ))
     except Exception as e:
         logger.error(f"Erro ao logar mensagem: {e}")
+        # Enfileirar para retry — não perder dados
+        _enqueue_pending_message(msg_params)
         raise
+
+
+def _enqueue_pending_message(msg_params: Dict):
+    """Adiciona mensagem à fila de pendentes no session_state para retry posterior."""
+    if "pending_log_messages" not in st.session_state:
+        st.session_state.pending_log_messages = []
+    # Evitar duplicatas (mesmo thread + message_order + message_type)
+    for existing in st.session_state.pending_log_messages:
+        if (existing["thread_id"] == msg_params["thread_id"] and
+            existing["message_order"] == msg_params["message_order"] and
+            existing["message_type"] == msg_params["message_type"]):
+            return
+    st.session_state.pending_log_messages.append(msg_params)
+    logger.warning(f"📋 Mensagem enfileirada para retry (fila: {len(st.session_state.pending_log_messages)})")
+
+
+def flush_pending_messages():
+    """Tenta salvar mensagens pendentes que falharam anteriormente."""
+    if "pending_log_messages" not in st.session_state or not st.session_state.pending_log_messages:
+        return
+
+    queue = st.session_state.pending_log_messages
+    saved = []
+
+    for msg in queue:
+        try:
+            metadata_json = _serialize_json(msg.get("metadata"))
+            execute_db_query(
+                """INSERT INTO conversation_log
+                   (thread_id, user_id, persona_name, session_number, message_type,
+                    message_content, message_order, metadata)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (msg["thread_id"], msg["user_id"], msg["persona_name"],
+                 msg["session_number"], msg["message_type"], msg["message_content"],
+                 msg["message_order"], metadata_json)
+            )
+            saved.append(msg)
+        except Exception as e:
+            logger.warning(f"⏳ Flush falhou para mensagem order={msg['message_order']}: {e}")
+            break  # Se falhou, DB provavelmente ainda está fora — parar
+
+    if saved:
+        for msg in saved:
+            queue.remove(msg)
+        logger.info(f"✅ Flush: {len(saved)} mensagens pendentes salvas no Supabase (restam: {len(queue)})")
+
+
+def sync_session_to_db():
+    """Sincroniza mensagens do session_state com conversation_log.
+    Compara contagem de mensagens na RAM vs banco e salva as faltantes."""
+    if "messages" not in st.session_state or "thread_id" not in st.session_state:
+        return
+
+    thread_id = st.session_state.thread_id
+    messages = st.session_state.messages
+
+    if not messages:
+        return
+
+    try:
+        # Contar mensagens no banco para este thread
+        result = execute_db_query(
+            "SELECT COUNT(*) as count FROM conversation_log WHERE thread_id = %s",
+            (thread_id,), fetch=True
+        )
+        db_count = result[0]['count'] if result else 0
+        ram_count = len(messages)
+
+        if db_count >= ram_count:
+            return  # Banco está em dia
+
+        logger.warning(
+            f"🔄 Sync: RAM tem {ram_count} mensagens, banco tem {db_count}. "
+            f"Salvando {ram_count - db_count} faltantes..."
+        )
+
+        # Buscar message_orders já existentes no banco para evitar duplicatas
+        existing = execute_db_query(
+            "SELECT message_order FROM conversation_log WHERE thread_id = %s",
+            (thread_id,), fetch=True
+        )
+        existing_orders = {row['message_order'] for row in existing} if existing else set()
+
+        saved = 0
+        for i, msg in enumerate(messages):
+            msg_order = i + 1  # message_order é 1-indexed
+            if msg_order in existing_orders:
+                continue
+
+            # Determinar tipo de mensagem
+            if isinstance(msg, HumanMessage):
+                if END_SESSION_CODE in msg.content:
+                    continue  # Não salvar marcadores de fim de sessão
+                msg_type = 'therapist'
+            elif isinstance(msg, AIMessage):
+                is_eval = msg.response_metadata.get(EVALUATION_METADATA_KEY, False) if hasattr(msg, 'response_metadata') else False
+                msg_type = 'evaluation' if is_eval else 'patient'
+            else:
+                continue
+
+            # Determinar session_number baseado nos session_end_indices
+            session_num = st.session_state.current_session_num
+            indices = st.session_state.get("session_end_indices", {})
+            for sn, end_idx in sorted(indices.items()):
+                if msg_order <= end_idx:
+                    session_num = int(sn)
+                    break
+
+            try:
+                metadata_json = None
+                if msg_type == 'evaluation':
+                    metadata_json = _serialize_json({'completed_session': session_num})
+
+                execute_db_query(
+                    """INSERT INTO conversation_log
+                       (thread_id, user_id, persona_name, session_number, message_type,
+                        message_content, message_order, metadata)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (thread_id, st.session_state.user_id,
+                     st.session_state.current_patient['name'],
+                     session_num, msg_type, msg.content, msg_order, metadata_json)
+                )
+                saved += 1
+            except Exception as e:
+                logger.error(f"Sync falhou na mensagem {msg_order}: {e}")
+                break  # DB provavelmente fora — parar
+
+        if saved:
+            logger.info(f"✅ Sync completo: {saved} mensagens salvas no Supabase")
+    except Exception as e:
+        logger.error(f"Erro no sync_session_to_db: {e}")
 
 # --- 8. INICIALIZAÇÃO ---
 setup_database()
@@ -989,6 +1128,9 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
         # Reconciliar session_metadata com dados reais do conversation_log
         reconcile_session_metadata(thread_id, current_session, len(messages))
 
+        # Sincronizar mensagens da RAM que possam não estar no banco
+        sync_session_to_db()
+
         logger.info(f"Sessão restaurada: {persona_name}, sessão {current_session}, mensagens={len(messages)}")
         if messages:
             st.toast(f"Sessão restaurada com {persona_name}!")
@@ -1197,6 +1339,10 @@ with st.sidebar:
     
     if st.session_state.current_session_num <= NUM_SESSIONS:
         if st.button("🏁 Encerrar Sessão e Avaliar", type="primary", use_container_width=True):
+            # Garantir que mensagens pendentes sejam salvas antes da avaliação
+            flush_pending_messages()
+            sync_session_to_db()
+
             with st.spinner("⏳ Gerando avaliação detalhada..."):
                 try:
                     end_message = HumanMessage(content=END_SESSION_CODE)
@@ -1240,7 +1386,6 @@ with st.sidebar:
                         )
                     except Exception as e:
                         logger.error(f"Falha ao logar avaliação: {e}")
-                        st.toast("⚠️ Avaliação gerada, mas houve erro ao salvar no log.", icon="⚠️")
 
                     if "current_session" in response:
                         new_session_num = response["current_session"]
@@ -1258,7 +1403,6 @@ with st.sidebar:
                             )
                         except Exception as e:
                             logger.error(f"Falha ao atualizar session_stats: {e}")
-                            st.toast("⚠️ Sessão avaliada, mas houve erro ao atualizar estatísticas.", icon="⚠️")
                         
                         if new_session_num <= NUM_SESSIONS:
                             st.toast(f"✅ Sessão {new_session_num - 1} avaliada! Iniciando Sessão {new_session_num}...")
@@ -1317,6 +1461,9 @@ if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.
     if not prompt.strip():
         st.warning("⚠️ Por favor, digite uma mensagem válida.")
     else:
+        # Tentar salvar mensagens pendentes antes de adicionar novas
+        flush_pending_messages()
+
         st.session_state.messages.append(HumanMessage(content=prompt))
 
         # Logar mensagem do terapeuta
@@ -1332,7 +1479,6 @@ if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.
             )
         except Exception as e:
             logger.error(f"Falha ao logar mensagem do terapeuta: {e}")
-            st.toast("⚠️ Erro ao salvar mensagem no log.", icon="⚠️")
 
         st.rerun()
 
@@ -1375,7 +1521,6 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                     )
                 except Exception as e:
                     logger.error(f"Falha ao logar resposta do paciente: {e}")
-                    st.toast("⚠️ Erro ao salvar resposta no log.", icon="⚠️")
 
                 st.rerun()
             except TimeoutError:
