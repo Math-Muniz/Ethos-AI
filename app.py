@@ -523,10 +523,9 @@ def ensure_checkpointer_connection() -> PostgresSaver:
             if not _setup_done:
                 _checkpointer_conn.autocommit = True
                 _checkpointer.setup()
-                _checkpointer_conn.autocommit = False
                 _setup_done = True
             else:
-                _checkpointer_conn.autocommit = False
+                _checkpointer_conn.autocommit = True
 
             # Atualizar referência no app compilado (LangGraph usa app.checkpointer)
             if _compiled_app is not None:
@@ -685,7 +684,8 @@ def update_session_stats(thread_id: str, session_num: int, total_msgs: int):
         status = "COMPLETA" if is_complete else "EM ANDAMENTO"
         logger.info(f"✅ Stats atualizados: thread={thread_id}, session={session_num}, msgs={total_msgs}, status={status}")
     except Exception as e:
-        logger.warning(f"Erro ao atualizar stats: {e}")
+        logger.error(f"Erro ao atualizar stats: {e}")
+        raise
 
 def _serialize_json(data: Dict) -> Optional[str]:
     """Serializa dados para JSON usando orjson se disponível (3-5x mais rápido)."""
@@ -721,7 +721,8 @@ def log_conversation_message(
             message_type, message_content, message_order, metadata_json
         ))
     except Exception as e:
-        logger.warning(f"Erro ao logar mensagem: {e}")
+        logger.error(f"Erro ao logar mensagem: {e}")
+        raise
 
 # --- 8. INICIALIZAÇÃO ---
 setup_database()
@@ -893,6 +894,30 @@ def load_messages_from_conversation_log(thread_id: str) -> tuple:
         logger.error(f"Erro ao carregar mensagens do conversation_log: {e}")
         return [], 1, {}
 
+def reconcile_session_metadata(thread_id: str, current_session: int, total_messages: int):
+    """Reconcilia session_metadata com dados reais do conversation_log."""
+    try:
+        query = """
+            SELECT COUNT(DISTINCT session_number)
+            FROM conversation_log
+            WHERE thread_id = %s AND message_type = 'evaluation'
+        """
+        result = execute_db_query(query, (thread_id,), fetch=True)
+        log_eval_count = result[0]['count'] if result else 0
+
+        # current_session é a PRÓXIMA sessão (ex: se completou 3, current_session=4)
+        metadata_session_count = current_session - 1
+        actual_session_count = max(log_eval_count, metadata_session_count)
+
+        if actual_session_count > metadata_session_count:
+            logger.warning(
+                f"⚠️ Reconciliação: session_metadata indicava {metadata_session_count} sessões, "
+                f"mas conversation_log tem {log_eval_count} avaliações. Corrigindo para {actual_session_count}."
+            )
+            update_session_stats(thread_id, actual_session_count, total_messages)
+    except Exception as e:
+        logger.error(f"Erro na reconciliação de session_metadata: {e}")
+
 def load_session_from_checkpoint(thread_id: str) -> bool:
     try:
         logger.info(f"Carregando sessão: {thread_id}")
@@ -960,6 +985,9 @@ def load_session_from_checkpoint(thread_id: str) -> bool:
         st.session_state.session_end_indices = session_end_indices
         st.session_state.thread_id = thread_id
         st.session_state.current_patient = persona_data
+
+        # Reconciliar session_metadata com dados reais do conversation_log
+        reconcile_session_metadata(thread_id, current_session, len(messages))
 
         logger.info(f"Sessão restaurada: {persona_name}, sessão {current_session}, mensagens={len(messages)}")
         if messages:
@@ -1199,30 +1227,38 @@ with st.sidebar:
                     st.session_state.messages.append(evaluation_message)
 
                     # Logar avaliação
-                    log_conversation_message(
-                        thread_id=st.session_state.thread_id,
-                        user_id=st.session_state.user_id,
-                        persona_name=st.session_state.current_patient['name'],
-                        session_number=st.session_state.current_session_num,
-                        message_type='evaluation',
-                        message_content=evaluation_message.content,
-                        message_order=len(st.session_state.messages),
-                        metadata={'completed_session': st.session_state.current_session_num}
-                    )
+                    try:
+                        log_conversation_message(
+                            thread_id=st.session_state.thread_id,
+                            user_id=st.session_state.user_id,
+                            persona_name=st.session_state.current_patient['name'],
+                            session_number=st.session_state.current_session_num,
+                            message_type='evaluation',
+                            message_content=evaluation_message.content,
+                            message_order=len(st.session_state.messages),
+                            metadata={'completed_session': st.session_state.current_session_num}
+                        )
+                    except Exception as e:
+                        logger.error(f"Falha ao logar avaliação: {e}")
+                        st.toast("⚠️ Avaliação gerada, mas houve erro ao salvar no log.", icon="⚠️")
 
                     if "current_session" in response:
                         new_session_num = response["current_session"]
                         st.session_state.current_session_num = new_session_num
-                        
+
                         if "session_end_indices" in response:
                             st.session_state.session_end_indices = response["session_end_indices"]
-                        
-                        # Atualizar estatísticas consolidadas
-                        update_session_stats(
-                            st.session_state.thread_id,
-                            new_session_num - 1,  # Sessão que acabou de ser avaliada
-                            len(st.session_state.messages)
-                        )
+
+                        # Atualizar estatísticas consolidadas com retry
+                        try:
+                            update_session_stats(
+                                st.session_state.thread_id,
+                                new_session_num - 1,  # Sessão que acabou de ser avaliada
+                                len(st.session_state.messages)
+                            )
+                        except Exception as e:
+                            logger.error(f"Falha ao atualizar session_stats: {e}")
+                            st.toast("⚠️ Sessão avaliada, mas houve erro ao atualizar estatísticas.", icon="⚠️")
                         
                         if new_session_num <= NUM_SESSIONS:
                             st.toast(f"✅ Sessão {new_session_num - 1} avaliada! Iniciando Sessão {new_session_num}...")
@@ -1284,15 +1320,19 @@ if prompt := st.chat_input("Digite sua mensagem...", disabled=(st.session_state.
         st.session_state.messages.append(HumanMessage(content=prompt))
 
         # Logar mensagem do terapeuta
-        log_conversation_message(
-            thread_id=st.session_state.thread_id,
-            user_id=st.session_state.user_id,
-            persona_name=st.session_state.current_patient['name'],
-            session_number=st.session_state.current_session_num,
-            message_type='therapist',
-            message_content=prompt,
-            message_order=len(st.session_state.messages)
-        )
+        try:
+            log_conversation_message(
+                thread_id=st.session_state.thread_id,
+                user_id=st.session_state.user_id,
+                persona_name=st.session_state.current_patient['name'],
+                session_number=st.session_state.current_session_num,
+                message_type='therapist',
+                message_content=prompt,
+                message_order=len(st.session_state.messages)
+            )
+        except Exception as e:
+            logger.error(f"Falha ao logar mensagem do terapeuta: {e}")
+            st.toast("⚠️ Erro ao salvar mensagem no log.", icon="⚠️")
 
         st.rerun()
 
@@ -1323,15 +1363,19 @@ if st.session_state.messages and isinstance(st.session_state.messages[-1], Human
                 st.session_state.messages.append(ai_response)
 
                 # Logar resposta do paciente
-                log_conversation_message(
-                    thread_id=st.session_state.thread_id,
-                    user_id=st.session_state.user_id,
-                    persona_name=st.session_state.current_patient['name'],
-                    session_number=st.session_state.current_session_num,
-                    message_type='patient',
-                    message_content=ai_response.content,
-                    message_order=len(st.session_state.messages)
-                )
+                try:
+                    log_conversation_message(
+                        thread_id=st.session_state.thread_id,
+                        user_id=st.session_state.user_id,
+                        persona_name=st.session_state.current_patient['name'],
+                        session_number=st.session_state.current_session_num,
+                        message_type='patient',
+                        message_content=ai_response.content,
+                        message_order=len(st.session_state.messages)
+                    )
+                except Exception as e:
+                    logger.error(f"Falha ao logar resposta do paciente: {e}")
+                    st.toast("⚠️ Erro ao salvar resposta no log.", icon="⚠️")
 
                 st.rerun()
             except TimeoutError:
