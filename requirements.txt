@@ -33,7 +33,7 @@ langsmith==0.4.37
 markupsafe==3.0.3
 narwhals==2.7.0
 numpy==2.3.3
-openai==2.3.0
+openai==2.29.0
 orjson==3.11.3
 ormsgpack==1.11.0
 packaging==25.0
