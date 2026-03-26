@@ -260,7 +260,8 @@ def get_db_pool() -> ConnectionPool:
                         "keepalives": 1,
                         "keepalives_idle": 30,
                         "keepalives_interval": 10,
-                        "keepalives_count": 5
+                        "keepalives_count": 5,
+                        "prepare_threshold": 0
                     }
                 )
                 logger.info("✅ Connection pool criado (min=2, max=10, check=enabled)")
@@ -290,7 +291,8 @@ def create_supabase_connection():
         keepalives=1,
         keepalives_idle=30,
         keepalives_interval=10,
-        keepalives_count=5
+        keepalives_count=5,
+        prepare_threshold=0
     )
 
 def execute_db_query(query: str, params: tuple = None, fetch: bool = False):
