@@ -22,10 +22,13 @@ except ImportError:
     import json
     USE_ORJSON = False
 from prompts import (
-    PERSONA_RAFAEL, 
-    PERSONA_CLARA, 
-    PERSONA_LUIZ, 
-    EVALUATION_SESSION_1, 
+    PERSONA_RAFAEL,
+    PERSONA_CLARA,
+    PERSONA_LUIZ,
+    LUIZ_MEMORIES_HEADER,
+    LUIZ_SESSION_MEMORIES,
+    LUIZ_SESSION_BLOCKS,
+    EVALUATION_SESSION_1,
     EVALUATION_SESSION_2,
     EVALUATION_SESSION_3,
     EVALUATION_SESSION_4,
@@ -545,7 +548,20 @@ def get_app_and_checkpointer(_patient_llm, _evaluator_llm):
     checkpointer = ensure_checkpointer_connection()
     
     def patient_node(state: AgentState) -> Dict:
-        system_prompt = SystemMessage(content=state["patient_prompt"])
+        system_text = state["patient_prompt"]
+        if state.get("persona_name") == "Luiz":
+            n = min(state.get("current_session", 1), NUM_SESSIONS)
+            past_memories = "\n".join(
+                LUIZ_SESSION_MEMORIES[i]
+                for i in range(1, n)
+                if i in LUIZ_SESSION_MEMORIES
+            )
+            sections = [system_text]
+            if past_memories:
+                sections.append(f"{LUIZ_MEMORIES_HEADER}\n{past_memories}")
+            sections.append(LUIZ_SESSION_BLOCKS[n])
+            system_text = "\n\n".join(sections)
+        system_prompt = SystemMessage(content=system_text)
         filtered = filter_messages(state["messages"])
         messages_to_send = [system_prompt] + filtered
         token_count = _patient_llm.get_num_tokens_from_messages(messages_to_send)
