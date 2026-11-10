@@ -2,7 +2,7 @@
 
 Plataforma de pacientes simulados por modelo de linguagem para o treinamento de estudantes de Psicologia no tratamento do transtorno por uso de álcool. O estudante conduz, com um paciente simulado, as sete sessões centrais do manual de terapia de habilidades de enfrentamento (*Coping Skills Training*) do Project MATCH. Ao fim de cada sessão, um agente avaliador devolve um parecer de adesão ao protocolo, item a item, com justificativa apoiada na transcrição.
 
-O sistema foi desenvolvido como parte da dissertação de mestrado *Ethos AI: Agentes de Inteligência Artificial Baseados em LLM como Pacientes Simulados para Treinamento de Terapeutas no Tratamento do Alcoolismo*, do Programa de Pós-Graduação em Modelagem Computacional da Universidade Federal de Juiz de Fora (UFJF), 2026.
+O sistema foi desenvolvido como parte da dissertação de mestrado *Ethos AI: Agentes de Inteligência Artificial Baseados em LLM como Pacientes Simulados para o Treinamento de Psicólogos no Tratamento do Alcoolismo*, do Programa de Pós-Graduação em Modelagem Computacional da Universidade Federal de Juiz de Fora (UFJF), 2026.
 
 > **Aviso.** O Ethos AI é uma ferramenta de treinamento. Ele não oferece atendimento a pessoas com problemas relacionados ao álcool, e o parecer do agente avaliador é um apoio à autoavaliação do estudante, não uma medida de competência clínica.
 
