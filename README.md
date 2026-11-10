@@ -99,7 +99,7 @@ Este repositório não contém dados de participantes. As conversas ficam gravad
 
 ## Como citar
 
-DAMASCO, M. M. **Ethos AI: Agentes de Inteligência Artificial Baseados em LLM como Pacientes Simulados para Treinamento de Terapeutas no Tratamento do Alcoolismo**. 2026. Dissertação (Mestrado em Modelagem Computacional) – Faculdade de Engenharia, Universidade Federal de Juiz de Fora, Juiz de Fora, 2026.
+DAMASCO, M. M. **Ethos AI: Agentes de Inteligência Artificial Baseados em LLM como Pacientes Simulados para o Treinamento de Psicólogos no Tratamento do Alcoolismo**. 2026. Dissertação (Mestrado em Modelagem Computacional) – Faculdade de Engenharia, Universidade Federal de Juiz de Fora, Juiz de Fora, 2026.
 
 ## Licença
 
